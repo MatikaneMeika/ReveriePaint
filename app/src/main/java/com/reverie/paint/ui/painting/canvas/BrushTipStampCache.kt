@@ -13,7 +13,7 @@ import java.nio.ByteOrder
 /**
  * 笔尖戳印位图缓存 (Brush Tip Stamp Cache)。
  *
- * 把笔刷 tip (assets/brushes/*.png / *.gbr) 解码为已按笔刷颜色着色的
+ * 把笔刷 tip (assets/brushes/ 目录下的 png / gbr 文件) 解码为已按笔刷颜色着色的
  * ARGB_8888 戳印位图, 供前缓冲 STAMP 分级预览逐 dab 盖印。
  * 纯 Kotlin, 零 C++/JNI 改动。
  *
