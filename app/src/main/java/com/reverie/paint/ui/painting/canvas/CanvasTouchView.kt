@@ -904,6 +904,21 @@ class CanvasTouchView(context: Context) : View(context) {
     // dab 弧长排布顶点收集
     private val stampVX = FloatArray(128)
     private val stampVY = FloatArray(128)
+    private val stampVP = FloatArray(128)
+    // 真墨模式无 tip 位图 (程序化圆头笔刷) 时的圆形软戳印 (按颜色缓存)
+    private var roundDabBitmap: Bitmap? = null
+    private var roundDabColor = 0
+    private fun roundDab(color: Int): Bitmap {
+        val c = color or (0xFF shl 24)
+        roundDabBitmap?.let { if (roundDabColor == c && !it.isRecycled) return it }
+        val b = Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888)
+        val cv = Canvas(b)
+        val pt = Paint(Paint.ANTI_ALIAS_FLAG).apply { this.color = c }
+        cv.drawCircle(32f, 32f, 31f, pt)
+        roundDabBitmap = b
+        roundDabColor = c
+        return b
+    }
 
     // ---- 前缓冲 UI 避让注册表 (PR #82 review 问题 3) ----
     // setZOrderOnTop(true) 把前缓冲层置于整个 Window 之上, 预览假线可能画到
@@ -1107,6 +1122,15 @@ class CanvasTouchView(context: Context) : View(context) {
     private val scratchSrcPts = FloatArray(6)
     private val scratchDstPts = FloatArray(6)
     private val SCRATCH_FRESH_MS = 60L
+
+    /**
+     * 引擎草稿 tile 是否上前缓冲。默认关: 真机上它画成笔尖前的一条细灰线 (草稿 paintop
+     * 用落笔快照预设 + 原始压力, 尺寸/不透明度与真墨对不上), 且它异步滞后, 会让前缓冲
+     * 的戳印让位 (scratchTileFresh) 从而等待引擎。`setprop debug.reverie.scratchtile 1` 可重开做对比。
+     */
+    private val REAL_INK_SCRATCH_TILE: Boolean by lazy {
+        com.reverie.paint.core.PerfTrace.debugPropInt("debug.reverie.scratchtile", 0) == 1
+    }
 
     /** computePreviewStrokePath 写入的回填起点步数 (真墨草稿复用同一段真实样本) */
     private var lastBackfillStartStep = 0
@@ -1391,12 +1415,14 @@ class CanvasTouchView(context: Context) : View(context) {
         baseAlpha: Float,
     ): Boolean {
         val tipAsset = v.brushTipAsset
-        if (tipAsset.isBlank()) return false
-        val bmp = activeStrokeStampBitmap ?: try {
+        val realInk = v.frontBufferRealInkOnly
+        val bmp = activeStrokeStampBitmap ?: (if (tipAsset.isBlank()) null else try {
             stampCache.get(tipAsset, baseColor)?.also { activeStrokeStampBitmap = it }
         } catch (_: Throwable) {
             null
-        } ?: return false
+        }) ?: (if (realInk) roundDab(baseColor).also { activeStrokeStampBitmap = it } else return false)
+        val pressureOn = v.brushPressureEnabled
+        val sizeBase = (v.brushSize.toFloat() * (canvasZoom * canvasFitScale).coerceAtLeast(0.001f))
 
         // 1. 收集顶点: 回填段历史点 (旧→新) → 当前点 → 预测延伸点
         var vc = 0
@@ -1406,6 +1432,7 @@ class CanvasTouchView(context: Context) : View(context) {
                 val idx = (touchHistoryHead - 1 - step + 128) % 64
                 stampVX[vc] = touchHistoryX[idx]
                 stampVY[vc] = touchHistoryY[idx]
+                stampVP[vc] = touchHistoryP[idx]
                 vc++
                 step--
             }
@@ -1414,50 +1441,69 @@ class CanvasTouchView(context: Context) : View(context) {
             if (vc < 127) {
                 stampVX[vc] = curPos.x
                 stampVY[vc] = curPos.y
+                stampVP[vc] = localPressure
                 vc++
             }
         }
         if (hasExtension && vc < 128) {
             stampVX[vc] = endX
             stampVY[vc] = endY
+            stampVP[vc] = predictedPressure
             vc++
         }
         if (vc == 0) return false
 
-        // 2. 弧长排布 dab: 间距 = brushSpacing × 笔宽 (Krita 语义), 钳制防爆量
-        val spacingPx = (v.brushSpacing.toFloat() * dabDiameterPx)
+        // 2. 弧长排布 dab: 间距 = brushSpacing × 笔宽 (Krita 语义), 钳制防爆量。
+        //    每个 dab 的尺寸按其所在位置的真实采样压力插值 (经引擎压力曲线)。
+        //    总弧长超出 64 个 dab 时放大间距, 保证戳印一直铺到最新采样点 (旧版截断最新端)。
+        fun dabSize(p: Float): Float {
+            val f = if (pressureOn) pressureFractionCached(p) else 1f
+            return (sizeBase * f).coerceAtLeast(1.5f)
+        }
+        var totalLen = 0f
+        for (k in 1 until vc) totalLen += kotlin.math.hypot(stampVX[k] - stampVX[k - 1], stampVY[k] - stampVY[k - 1])
+        var spacingPx = (v.brushSpacing.toFloat() * dabDiameterPx)
             .coerceIn(dabDiameterPx * 0.12f, dabDiameterPx * 1.5f)
             .coerceAtLeast(2f)
+        if (totalLen / spacingPx > 62f) spacingPx = totalLen / 62f
         var count = 0
-        // 首 dab 落在起点
         previewStampX[0] = stampVX[0]
         previewStampY[0] = stampVY[0]
-        previewStampSize[0] = dabDiameterPx
+        previewStampSize[0] = if (realInk) dabSize(stampVP[0]) else dabDiameterPx
         previewStampAlpha[0] = baseAlpha
         count = 1
         var acc = 0f
         var i = 1
-        while (i < vc && count < 64) {
+        while (i < vc && count < 63) {
+            val x0 = stampVX[i - 1]
+            val y0 = stampVY[i - 1]
             val ex = stampVX[i]
             val ey = stampVY[i]
-            var sx = previewStampX[count - 1]
-            var sy = previewStampY[count - 1]
-            var segLeft = kotlin.math.hypot(ex - sx, ey - sy)
-            while (acc + segLeft >= spacingPx && count < 64) {
-                val need = spacingPx - acc
-                val t = if (segLeft > 0f) need / segLeft else 0f
-                sx += (ex - sx) * t
-                sy += (ey - sy) * t
-                previewStampX[count] = sx
-                previewStampY[count] = sy
-                previewStampSize[count] = dabDiameterPx
+            val segLen = kotlin.math.hypot(ex - x0, ey - y0)
+            var pos = spacingPx - acc // 本段内下一个 dab 的弧长位置
+            while (pos <= segLen && count < 63) {
+                val t = if (segLen > 0f) pos / segLen else 0f
+                previewStampX[count] = x0 + (ex - x0) * t
+                previewStampY[count] = y0 + (ey - y0) * t
+                previewStampSize[count] = if (realInk) dabSize(stampVP[i - 1] + (stampVP[i] - stampVP[i - 1]) * t) else dabDiameterPx
                 previewStampAlpha[count] = baseAlpha
                 count++
-                segLeft = kotlin.math.hypot(ex - sx, ey - sy)
-                acc = 0f
+                pos += spacingPx
             }
-            acc += segLeft
+            acc = segLen - (pos - spacingPx)
             i++
+        }
+        // 最新真实采样点必盖一个 dab: 笔尖处不留空
+        if (realInk && vc > 1 && count < 64) {
+            val lx = stampVX[vc - 1]
+            val ly = stampVY[vc - 1]
+            if (previewStampX[count - 1] != lx || previewStampY[count - 1] != ly) {
+                previewStampX[count] = lx
+                previewStampY[count] = ly
+                previewStampSize[count] = dabSize(stampVP[vc - 1])
+                previewStampAlpha[count] = baseAlpha
+                count++
+            }
         }
         if (count == 0) return false
 
@@ -5224,11 +5270,10 @@ class CanvasTouchView(context: Context) : View(context) {
                         // 不再要求 hasPredictedScreenPoint: 预测被抑制时回填段照画
                         val hasPreview = computePreviewStrokePath(curPos, previewStrokePath)
                         val realInk = v.frontBufferRealInkOnly
-                        if (realInk && !isHoverOverUi(curX, curY)) submitEngineScratch(v)
-                        if (realInk && !hasPreview && scratchTileFresh()) {
-                            // 无戳印可画, 但后台草稿 tile 仍在屏上: 保留, 不清
-                            drew = true
-                        } else if (hasPreview) {
+                        // 真墨模式: 每个真实采样立即盖戳印, 不等引擎、不等草稿 tile。
+                        // 引擎草稿 tile 不再上前缓冲 (见 REAL_INK_SCRATCH_TILE 说明)。
+                        if (realInk && REAL_INK_SCRATCH_TILE && !isHoverOverUi(curX, curY)) submitEngineScratch(v)
+                        if (hasPreview) {
                             // 前缓冲层位于窗口 z 序最顶层 (setZOrderOnTop): 笔尖或前瞻端点落在
                             // 工具栏/浮窗等 UI 区域上时跳过绘制, 避免预览墨迹盖在 UI 之上。
                             // 端点判定不够: 高速运笔一帧可跨过顶栏, 包络相交做保守整段判定
@@ -5237,9 +5282,7 @@ class CanvasTouchView(context: Context) : View(context) {
                                 isHoverOverUi(previewTipEndX, previewTipEndY) ||
                                 previewEnvelopeHitsUi(curX, curY)
                             if (!overUi) {
-                                if (realInk && scratchTileFresh()) {
-                                    // 真墨草稿 tile 由后台线程直出, 此处不用戳印覆盖
-                                } else if (previewUsedStamp && previewStampBitmap != null && previewStampCount > 0) {
+                                if (previewUsedStamp && previewStampBitmap != null && previewStampCount > 0) {
                                     // STAMP 分级: 真实笔尖戳印直出 (水彩/纹理/绘画类)
                                     frontBufferOverlay?.renderStampPreview(
                                         previewStampBitmap!!,
