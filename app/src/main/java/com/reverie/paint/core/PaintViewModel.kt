@@ -1418,6 +1418,43 @@ class PaintViewModel : ViewModel() {
     var frontBufferPredictionEnabled by mutableStateOf(false)
 
     /**
+     * 真墨模式 (docs/REAL-INK-FRONT-BUFFER.md, 本原型默认开): 前缓冲只画真实采样点,
+     * 关闭全部运动预测。`adb shell setprop debug.reverie.realink 0|1` 可临时覆盖。
+     */
+    var frontBufferRealInkOnly by mutableStateOf(true)
+
+    /**
+     * 引擎草稿 dab (默认开): 真墨模式下回填段交给 Krita 用完整笔刷渲染。
+     * 原生库不含该入口 (预编译 so) 时自动退回 STAMP/折线。
+     * `adb shell setprop debug.reverie.scratch 0|1` 可临时覆盖。
+     */
+    var frontBufferEngineScratchEnabled by mutableStateOf(true)
+
+    /** 系统属性覆盖 (-1 = 未设, 用偏好值); 打开画布时刷新 */
+    fun refreshRealInkOverrides() {
+        val ri = PerfTrace.debugPropInt("debug.reverie.realink", -1)
+        if (ri >= 0) frontBufferRealInkOnly = ri != 0
+        val sc = PerfTrace.debugPropInt("debug.reverie.scratch", -1)
+        if (sc >= 0) frontBufferEngineScratchEnabled = sc != 0
+    }
+
+    fun updateFrontBufferRealInkOnly(enabled: Boolean) {
+        frontBufferRealInkOnly = enabled
+        if (::appContext.isInitialized) {
+            appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
+                .edit().putBoolean("frontBufferRealInkOnly", enabled).apply()
+        }
+    }
+
+    fun updateFrontBufferEngineScratchEnabled(enabled: Boolean) {
+        frontBufferEngineScratchEnabled = enabled
+        if (::appContext.isInitialized) {
+            appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
+                .edit().putBoolean("frontBufferEngineScratchEnabled", enabled).apply()
+        }
+    }
+
+    /**
      * 笔迹预测总开关: 任一预测开启即视为开启
      */
     val stylusPredictionMasterEnabled: Boolean
@@ -3208,6 +3245,9 @@ class PaintViewModel : ViewModel() {
                 prefs.getBoolean("stylusFrontBufferPreviewEnabled", false),
             )
             motionPredictorEnabled = stylusStrokePredictionEnabled
+            frontBufferRealInkOnly = prefs.getBoolean("frontBufferRealInkOnly", true)
+            frontBufferEngineScratchEnabled = prefs.getBoolean("frontBufferEngineScratchEnabled", true)
+            refreshRealInkOverrides()
             samsungSingleClickAction = prefs.getString("samsungSingleClickAction", "toggle_eraser") ?: "toggle_eraser"
             samsungDoubleClickAction = prefs.getString("samsungDoubleClickAction", "undo") ?: "undo"
             samsungLongPressAction = prefs.getString("samsungLongPressAction", "tool_picker") ?: "tool_picker"

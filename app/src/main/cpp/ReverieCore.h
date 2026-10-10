@@ -951,6 +951,13 @@ private:
     bool appendStrokeSample(const QPointF &imgPos, qreal pressure, qreal tiltX = 0.0, qreal tiltY = 0.0, qreal rotation = 0.0, qreal timeSeconds = -1.0);
     void endStrokeBatch();
 
+    // Real-ink scratch dabs (docs/REAL-INK-FRONT-BUFFER.md): render the newest
+    // few samples with the FULL current preset into a throw-away device, never
+    // touching any layer. Returns a straight-alpha RGBA8888 tile in document
+    // pixels and its document rect; null image when unsupported (smudge/
+    // colour-mixing ops read layer pixels, no preset, empty result).
+    QImage renderScratchDabs(const float *xy, const float *pressure, int count, QRect *outRect);
+
     struct StrokeSample {
         QPointF imgPos;
         qreal pressure = 1.0;

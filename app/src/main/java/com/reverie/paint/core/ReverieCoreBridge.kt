@@ -477,6 +477,14 @@ object ReverieCoreBridge {
     /** 当前预设 Size 压感曲线求值：pressure(0..1) → 实际笔刷直径比例(0..1)，光标环同源缩放 */
     external fun brushPressureFraction(pressure: Float): Float
 
+    /**
+     * 真墨草稿 dab (docs/REAL-INK-FRONT-BUFFER.md): 用当前笔刷完整设置把 [count] 个
+     * 文档坐标样本 ([xy] 交错 x,y) 画到临时设备 (不写图层), 返回直通 alpha 的 RGBA
+     * 字节, [outRect] 写入文档矩形 (x,y,w,h)。不支持 (涂抹/混色/滤镜笔刷) 返回 null。
+     * 旧版预编译 libreverie_jni.so 没有此符号, 调用方须经 [com.reverie.paint.core.RealInkScratch]。
+     */
+    external fun renderScratchDabs(xy: FloatArray, pressure: FloatArray, count: Int, outRect: IntArray): ByteArray?
+
     external fun setBrushColor(color: String)
 
     external fun setBrushOpacity(opacity: Double)

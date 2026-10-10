@@ -48,6 +48,11 @@ class FrontBufferPathPacket(
     val stampSize: FloatArray = FloatArray(MAX_STAMPS),
     val stampAlpha: FloatArray = FloatArray(MAX_STAMPS),
     var stampCount: Int = 0,
+    // ---- 真墨草稿 tile (docs/REAL-INK-FRONT-BUFFER.md) ----
+    // 引擎用完整笔刷设置画出的真实像素 (文档坐标), scratchMatrix 为 tile→屏幕变换。
+    // 每次投递新建位图 (原型), GL 线程只读, 不与 UI 线程共享可变像素。
+    var scratchBitmap: Bitmap? = null,
+    val scratchMatrix: android.graphics.Matrix = android.graphics.Matrix(),
 )
 
 /**
@@ -122,6 +127,13 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
                             canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
 
                             if (param.isClear) {
+                                return
+                            }
+
+                            // 2a'. 真墨草稿 tile: 引擎真实像素直接贴图
+                            val scratch = param.scratchBitmap
+                            if (scratch != null && !scratch.isRecycled) {
+                                canvas.drawBitmap(scratch, param.scratchMatrix, stampPaint.apply { alpha = 255 })
                                 return
                             }
 
@@ -219,6 +231,7 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
                 packet.color = color
                 packet.isClear = false
                 packet.stampCount = 0 // 复用槽位: 清除残留戳印
+                packet.scratchBitmap = null
                 hasContent = true
                 renderer.renderFrontBufferedLayer(packet)
             } catch (t: Throwable) {
@@ -256,6 +269,7 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
                 alphas.copyInto(packet.stampAlpha, 0, 0, n)
                 packet.stampBitmap = bitmap
                 packet.stampCount = n
+                packet.scratchBitmap = null
                 packet.path?.rewind()
                 packet.isClear = false
                 hasContent = true
@@ -264,6 +278,32 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
                 // 提交失败: 立即释放槽位, 否则泄漏为永久 inFlight
                 packet.inFlight.set(false)
                 Log.w(TAG, "renderStampPreview error: ${t.message}")
+            }
+        }
+    }
+
+    /**
+     * 投递真墨草稿 tile: [bitmap] 为引擎渲染的真实笔刷像素, [tileToScreen] 把 tile
+     * 像素坐标映射到本层屏幕坐标。位图归 GL 线程所有, 调用方不得复用/回收。
+     */
+    fun renderScratchTile(bitmap: Bitmap, tileToScreen: android.graphics.Matrix) {
+        if (!isRendererInitialized) return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            @Suppress("UNCHECKED_CAST")
+            val renderer = frontRenderer as? CanvasFrontBufferedRenderer<FrontBufferPathPacket>
+                ?: return
+            val packet = obtainPacket() ?: return
+            try {
+                packet.scratchBitmap = bitmap
+                packet.scratchMatrix.set(tileToScreen)
+                packet.stampCount = 0
+                packet.path?.rewind()
+                packet.isClear = false
+                hasContent = true
+                renderer.renderFrontBufferedLayer(packet)
+            } catch (t: Throwable) {
+                packet.inFlight.set(false)
+                Log.w(TAG, "renderScratchTile error: ${t.message}")
             }
         }
     }

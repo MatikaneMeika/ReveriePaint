@@ -1008,11 +1008,13 @@ class CanvasTouchView(context: Context) : View(context) {
     private val touchHistoryX = FloatArray(64)
     private val touchHistoryY = FloatArray(64)
     private val touchHistoryTime = LongArray(64)
+    private val touchHistoryP = FloatArray(64) { 1f }
     private var touchHistoryCount = 0
     private var touchHistoryHead = 0
 
-    private fun recordTouchSample(x: Float, y: Float, timeMs: Long) {
+    private fun recordTouchSample(x: Float, y: Float, timeMs: Long, pressure: Float = 1f) {
         if (!x.isFinite() || !y.isFinite()) return
+        touchHistoryP[touchHistoryHead] = if (pressure.isFinite()) pressure.coerceIn(0.01f, 1f) else 1f
         touchHistoryX[touchHistoryHead] = x
         touchHistoryY[touchHistoryHead] = y
         touchHistoryTime[touchHistoryHead] = timeMs
@@ -1023,6 +1025,8 @@ class CanvasTouchView(context: Context) : View(context) {
     private fun resetTouchHistory() {
         touchHistoryCount = 0
         touchHistoryHead = 0
+        lastBackfillStartStep = 0
+        scratchLatch.reset()
     }
 
     // --- 低延迟预测光标与局部重绘状态 ---
@@ -1094,6 +1098,64 @@ class CanvasTouchView(context: Context) : View(context) {
         if (triggerInvalidate && had) {
             postInvalidateOnAnimation()
         }
+    }
+
+    // ---- 真墨草稿 dab (docs/REAL-INK-FRONT-BUFFER.md) ----
+    private val scratchDocXY = FloatArray(com.reverie.paint.model.RealInkPolicy.MAX_SCRATCH_SAMPLES * 2)
+    private val scratchP = FloatArray(com.reverie.paint.model.RealInkPolicy.MAX_SCRATCH_SAMPLES)
+    private val scratchMatrix = android.graphics.Matrix()
+    private val scratchSrcPts = FloatArray(6)
+    private val scratchDstPts = FloatArray(6)
+    private val scratchLatch = com.reverie.paint.model.RealInkPolicy.FailureLatch()
+
+    /** computePreviewStrokePath 写入的回填起点步数 (真墨草稿复用同一段真实样本) */
+    private var lastBackfillStartStep = 0
+
+    /**
+     * 回填段 (真实采样点) 交给引擎用完整笔刷渲染并直出前缓冲。
+     * 不满足条件/原生不支持/失败时返回 false, 调用方走既有 STAMP/折线预览。
+     */
+    private fun tryRenderEngineScratch(v: PaintViewModel): Boolean {
+        val overlay = frontBufferOverlay ?: return false
+        if (!com.reverie.paint.model.RealInkPolicy.engineScratchEligible(
+                v.frontBufferRealInkOnly, v.frontBufferEngineScratchEnabled, v.currentToolId, v.brushPaintOpId
+            )
+        ) return false
+        if (!com.reverie.paint.core.RealInkScratch.nativeAvailable || scratchLatch.tripped) return false
+        val steps = lastBackfillStartStep.coerceAtMost(com.reverie.paint.model.RealInkPolicy.MAX_SCRATCH_SAMPLES - 1)
+        if (steps <= 0) return false
+        val t0 = System.nanoTime()
+        ensureViewTransform()
+        var n = 0
+        for (step in steps downTo 0) {
+            val idx = (touchHistoryHead - 1 - step + 128) % 64
+            viewTransform.screenToDoc(touchHistoryX[idx], touchHistoryY[idx], pointScratch)
+            scratchDocXY[n * 2] = pointScratch[0]
+            scratchDocXY[n * 2 + 1] = pointScratch[1]
+            scratchP[n] = if (v.brushPressureEnabled) touchHistoryP[idx] else 1f
+            n++
+        }
+        val tile = com.reverie.paint.core.RealInkScratch.render(scratchDocXY, scratchP, n)
+        if (tile == null) {
+            scratchLatch.onFailure()
+            return false
+        }
+        scratchLatch.onSuccess()
+        // tile 像素 (0,0)/(w,0)/(0,h) → 文档坐标 → 屏幕坐标, 三点仿射 (含旋转/翻转/缩放)
+        val w = tile.bitmap.width.toFloat()
+        val h = tile.bitmap.height.toFloat()
+        scratchSrcPts[0] = 0f; scratchSrcPts[1] = 0f
+        scratchSrcPts[2] = w; scratchSrcPts[3] = 0f
+        scratchSrcPts[4] = 0f; scratchSrcPts[5] = h
+        for (k in 0 until 3) {
+            viewTransform.docToScreen(tile.docX + scratchSrcPts[k * 2], tile.docY + scratchSrcPts[k * 2 + 1], pointScratch)
+            scratchDstPts[k * 2] = pointScratch[0]
+            scratchDstPts[k * 2 + 1] = pointScratch[1]
+        }
+        scratchMatrix.setPolyToPoly(scratchSrcPts, 0, scratchDstPts, 0, 3)
+        overlay.renderScratchTile(tile.bitmap, scratchMatrix)
+        PerfTrace.tickNanos("realink.scratch", System.nanoTime() - t0)
+        return true
     }
 
     /**
@@ -1177,6 +1239,8 @@ class CanvasTouchView(context: Context) : View(context) {
             }
         }
 
+        lastBackfillStartStep = backfillStartStep
+
         // ---- 2. 前向延伸段 (仅预测可用且通过门控时) ----
         // 预测被抑制 (慢速/急转/看门狗) 时不再整段清空预览: 回填段照画, 只少画前瞻尾。
         var endX = curPos.x
@@ -1224,7 +1288,10 @@ class CanvasTouchView(context: Context) : View(context) {
         // ---- 2.5 STAMP 分级: 真实笔尖戳印 (水彩/纹理与排线/绘画类) ----
         // tip 不可解码 (如 GIH 动画笔尖) 时回落 TIER_2 发丝线, 而非直接无预览。
         previewUsedStamp = false
-        if (fidelityTier == PaintViewModel.PredictionFidelityTier.STAMP) {
+        // 真墨模式: TIER_2 发丝导引线与真笔刷差异最大, 改用真实笔尖戳印 (位置/宽度均为真实采样)
+        val stampEligible = fidelityTier == PaintViewModel.PredictionFidelityTier.STAMP ||
+            (v.frontBufferRealInkOnly && fidelityTier == PaintViewModel.PredictionFidelityTier.TIER_2)
+        if (stampEligible) {
             if (computeStampDabs(
                     v, backfillStartStep, hasExtension, endX, endY, curPos,
                     actualStrokeWidth, baseColor, baseAlpha
@@ -1404,7 +1471,7 @@ class CanvasTouchView(context: Context) : View(context) {
         var predX = rawX
         var predY = rawY
 
-        if (vm?.frontBufferPredictionEnabled == true && dt in 2L..100L) {
+        if (vm?.frontBufferPredictionEnabled == true && vm?.frontBufferRealInkOnly != true && dt in 2L..100L) {
             val vx = (rawX - lastHoverRawX) / dt
             val vy = (rawY - lastHoverRawY) / dt
             val speed = hypot(vx, vy)
@@ -3659,7 +3726,7 @@ class CanvasTouchView(context: Context) : View(context) {
                     val downP = pressure.coerceIn(0.01f, 1f)
                     if (v.frontBufferPredictionEnabled && tool == Tool.BRUSH && screenPos.x.isFinite() && screenPos.y.isFinite()) {
                         universalPredictor.addPoint(screenPos.x, screenPos.y, downP, event.eventTime)
-                        recordTouchSample(screenPos.x, screenPos.y, event.eventTime)
+                        recordTouchSample(screenPos.x, screenPos.y, event.eventTime, downP)
                     }
                     firstDocPos = docPos
                     currentStrokeDocPos = docPos
@@ -4935,7 +5002,7 @@ class CanvasTouchView(context: Context) : View(context) {
                             val ht = event.getHistoricalEventTime(i)
                             if (hx.isFinite() && hy.isFinite()) {
                                 universalPredictor.addPoint(hx, hy, hp, ht)
-                                recordTouchSample(hx, hy, ht)
+                                recordTouchSample(hx, hy, ht, hp)
                             }
                         }
                         val curX = event.getX(pointerIndex)
@@ -4945,15 +5012,17 @@ class CanvasTouchView(context: Context) : View(context) {
                         val curT = event.eventTime
                         if (curX.isFinite() && curY.isFinite()) {
                             universalPredictor.addPoint(curX, curY, curP, curT)
-                            recordTouchSample(curX, curY, curT)
+                            recordTouchSample(curX, curY, curT, curP)
                             priorStrokeScreenPos = Offset(universalPredictor.prevPosX, universalPredictor.prevPosY)
                         }
                     }
 
                     // 2. 笔尖前向超前预测计算 (分级放行：TIER_1/2/STAMP 放行，NONE 已在外层拦截)
-                    var predictionObtained = false
+                    // 真墨模式 (docs/REAL-INK-FRONT-BUFFER.md): 跳过全部预测器, 前缓冲只剩真实采样回填段
+                    val predictionAllowed = com.reverie.paint.model.RealInkPolicy.predictionAllowed(v.frontBufferRealInkOnly)
+                    var predictionObtained = !predictionAllowed
                     val op = oplusPredictor
-                    if (isStylus && op != null && op.isValid) {
+                    if (predictionAllowed && isStylus && op != null && op.isValid) {
                         try {
                             for (i in 0 until event.historySize) {
                                 cachedTouchPointInfo.x = event.getHistoricalX(pointerIndex, i)
@@ -5110,6 +5179,11 @@ class CanvasTouchView(context: Context) : View(context) {
                         }
                     }
 
+                    if (!predictionAllowed) {
+                        predictionObtained = false
+                        clearPredictedScreenPoint()
+                    }
+
                     // 预览活动打点: 预测成功或回填段绘制都算"活跃", 看门狗据此判定真正停滞。
                     // 回填段独立于预测工作, 慢速/急转时预测被抑制但预览仍在刷新, 不能清。
                     lastPredictionUptimeMs = android.os.SystemClock.uptimeMillis()
@@ -5140,7 +5214,9 @@ class CanvasTouchView(context: Context) : View(context) {
                                 isHoverOverUi(previewTipEndX, previewTipEndY) ||
                                 previewEnvelopeHitsUi(curX, curY)
                             if (!overUi) {
-                                if (previewUsedStamp && previewStampBitmap != null && previewStampCount > 0) {
+                                if (tryRenderEngineScratch(v)) {
+                                    // 真墨草稿: 引擎完整笔刷像素已直出
+                                } else if (previewUsedStamp && previewStampBitmap != null && previewStampCount > 0) {
                                     // STAMP 分级: 真实笔尖戳印直出 (水彩/纹理/绘画类)
                                     frontBufferOverlay?.renderStampPreview(
                                         previewStampBitmap!!,

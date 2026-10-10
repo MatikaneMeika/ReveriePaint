@@ -1306,3 +1306,71 @@ bool ReverieCore::strokeAirbrushTick()
 // Fast ARM NEON SIMD blitter to convert Krita's native BGRA/ARGB32 projection bytes
 // to Android Bitmap RGBA_8888 byte format with hardware vector acceleration.
 
+
+// ---------------------------------------------------------------------------
+// Real-ink scratch dabs (prototype, see docs/REAL-INK-FRONT-BUFFER.md)
+// ---------------------------------------------------------------------------
+// Called from the UI thread while the engine thread owns the live stroke, so
+// it builds its OWN painter/op/distance on a private device and only reads the
+// preset. Nothing here mutates m_strokeOp, m_strokeDistance or any layer.
+QImage ReverieCore::renderScratchDabs(const float *xy, const float *pressure, int count, QRect *outRect)
+{
+    if (outRect) *outRect = QRect();
+    if (!xy || !pressure || count < 1 || count > 64) return QImage();
+    if (!m_document || !m_brushPreset || !m_brushPreset->settings()) return QImage();
+    if (m_toolMode == ToolSmudge) return QImage();
+    const QString opId = m_brushPreset->paintOp().id();
+    // Ops that sample the layer below cannot be previewed on an empty device.
+    if (opId == QLatin1String("colorsmudge") || opId == QLatin1String("deformbrush") ||
+        opId == QLatin1String("filter") || opId == QLatin1String("duplicate") ||
+        m_brushPreset->hasMaskingPreset()) {
+        return QImage();
+    }
+    if (m_currentLayer < 0 || m_currentLayer >= m_layers.size() || !m_layers[m_currentLayer].node) {
+        return QImage();
+    }
+
+    KisPaintDeviceSP scratch = new KisPaintDevice(m_document->colorSpace());
+    KisPainter painter(scratch);
+    painter.setPaintColor(KoColor(m_brushColor, scratch->colorSpace()));
+    painter.setFillStyle(KisPainter::FillStyleForegroundColor);
+    painter.setStrokeStyle(KisPainter::StrokeStyleBrush);
+    painter.setCompositeOpId(COMPOSITE_OVER); // blend mode is resolved against real pixels later
+    painter.setOpacityF(1.0);
+    KisFakeRunnableStrokeJobsExecutor executor;
+    painter.setRunnableStrokeJobsInterface(&executor);
+
+    std::unique_ptr<KisPaintOp> op(KisPaintOpRegistry::instance()->paintOp(
+        m_brushPreset, &painter, KisNodeSP(m_layers[m_currentLayer].node), m_document));
+    if (!op) return QImage();
+
+    auto drain = [&op]() {
+        for (int guard = 0; guard < 64; ++guard) {
+            QVector<KisRunnableStrokeJobData *> jobs;
+            auto result = op->doAsynchronousUpdate(jobs);
+            for (auto *j : jobs) { j->run(); delete j; }
+            if (jobs.isEmpty() || !result.second) break;
+        }
+    };
+
+    const QPointF start(xy[0], xy[1]);
+    KisDistanceInformation distance(start, 0.0);
+    KisPaintInformation first(start, qBound<qreal>(0.0, pressure[0], 1.0));
+    if (count == 1) {
+        op->paintAt(first, &distance);
+    } else {
+        for (int i = 1; i < count; ++i) {
+            KisPaintInformation a(QPointF(xy[2 * (i - 1)], xy[2 * (i - 1) + 1]), qBound<qreal>(0.0, pressure[i - 1], 1.0));
+            KisPaintInformation b(QPointF(xy[2 * i], xy[2 * i + 1]), qBound<qreal>(0.0, pressure[i], 1.0));
+            op->paintLine(a, b, &distance);
+        }
+    }
+    drain();
+
+    const QRect bounds = scratch->exactBounds().intersected(QRect(0, 0, m_docWidth, m_docHeight));
+    if (bounds.isEmpty() || bounds.width() > 2048 || bounds.height() > 2048) return QImage();
+    QImage img = scratch->convertToQImage(nullptr, bounds.x(), bounds.y(), bounds.width(), bounds.height());
+    if (img.isNull()) return QImage();
+    if (outRect) *outRect = bounds;
+    return img.convertToFormat(QImage::Format_RGBA8888);
+}

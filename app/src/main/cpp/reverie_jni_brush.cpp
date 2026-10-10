@@ -486,6 +486,35 @@ Java_com_reverie_paint_core_ReverieCoreBridge_setBrushTexture(JNIEnv *env, jobje
     }
     core()->setBrushTexture(enabled == JNI_TRUE, scale, strength, modeStr, patStr);
 }
+
+// Real-ink scratch dabs: xy = [x0,y0,x1,y1,...] document coords, outRect =
+// int[4] (x,y,w,h). Returns straight-alpha RGBA bytes (w*h*4) or null.
+JNIEXPORT jbyteArray JNICALL
+Java_com_reverie_paint_core_ReverieCoreBridge_renderScratchDabs(JNIEnv *env, jobject,
+    jfloatArray xy, jfloatArray pressure, jint count, jintArray outRect)
+{
+    if (!xy || !pressure || !outRect || count <= 0) return nullptr;
+    if (env->GetArrayLength(xy) < count * 2 || env->GetArrayLength(pressure) < count ||
+        env->GetArrayLength(outRect) < 4) return nullptr;
+    jfloat *pxy = env->GetFloatArrayElements(xy, nullptr);
+    jfloat *pp = env->GetFloatArrayElements(pressure, nullptr);
+    QRect rect;
+    const QImage img = core()->renderScratchDabs(pxy, pp, count, &rect);
+    env->ReleaseFloatArrayElements(xy, pxy, JNI_ABORT);
+    env->ReleaseFloatArrayElements(pressure, pp, JNI_ABORT);
+    if (img.isNull() || rect.isEmpty()) return nullptr;
+    const jint r[4] = { rect.x(), rect.y(), rect.width(), rect.height() };
+    env->SetIntArrayRegion(outRect, 0, 4, r);
+    const int rowBytes = rect.width() * 4;
+    jbyteArray out = env->NewByteArray(rowBytes * rect.height());
+    if (!out) return nullptr;
+    for (int y = 0; y < rect.height(); ++y) {
+        env->SetByteArrayRegion(out, y * rowBytes, rowBytes,
+            reinterpret_cast<const jbyte *>(img.constScanLine(y)));
+    }
+    return out;
+}
+
 }
 
 
