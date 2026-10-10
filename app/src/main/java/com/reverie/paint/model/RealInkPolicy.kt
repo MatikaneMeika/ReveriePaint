@@ -42,4 +42,51 @@ object RealInkPolicy {
         fun onFailure() { consecutiveFailures++ }
         fun reset() { consecutiveFailures = 0 }
     }
+
+    /** 为何不走引擎草稿 (日志用); null = 可走 */
+    fun ineligibleReason(
+        realInkOnly: Boolean,
+        engineScratchEnabled: Boolean,
+        toolId: String,
+        paintOpId: String,
+        nativeAvailable: Boolean,
+    ): String? = when {
+        !realInkOnly -> "realInkOff"
+        !engineScratchEnabled -> "scratchSwitchOff"
+        toolId != "brush" -> "tool=$toolId"
+        paintOpId in LAYER_READING_OPS -> "layerReadingOp=$paintOpId"
+        !nativeAvailable -> "nativeMissing"
+        else -> null
+    }
+
+    /**
+     * 每笔草稿熔断 (异步 worker 用)。
+     * - 起笔后 [warmupMs] 内的空结果不计 (引擎线程尚未抓取预设快照, 必然为空);
+     * - 预热后连续空结果 >= [nullThreshold] → 本笔停用;
+     * - 单次渲染 > [slowRenderMs] 累计 [slowThreshold] 次 → 本笔停用 (保帧率)。
+     */
+    class StrokeBreaker(
+        private val warmupMs: Long = 250L,
+        private val nullThreshold: Int = 24,
+        private val slowRenderMs: Double = 12.0,
+        private val slowThreshold: Int = 3,
+    ) {
+        var consecutiveNulls = 0; private set
+        var slowCount = 0; private set
+        var tripReason: String? = null; private set
+        val tripped: Boolean get() = tripReason != null
+
+        fun reset() { consecutiveNulls = 0; slowCount = 0; tripReason = null }
+
+        fun onResult(ok: Boolean, sinceStrokeStartMs: Long, renderMs: Double) {
+            if (tripped) return
+            if (renderMs > slowRenderMs && ++slowCount >= slowThreshold) {
+                tripReason = "slowRender(${"%.1f".format(renderMs)}ms x$slowCount)"
+                return
+            }
+            if (ok) { consecutiveNulls = 0; return }
+            if (sinceStrokeStartMs < warmupMs) return
+            if (++consecutiveNulls >= nullThreshold) tripReason = "nullResults x$consecutiveNulls"
+        }
+    }
 }

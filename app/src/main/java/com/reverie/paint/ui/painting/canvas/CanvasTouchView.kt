@@ -1026,7 +1026,7 @@ class CanvasTouchView(context: Context) : View(context) {
         touchHistoryCount = 0
         touchHistoryHead = 0
         lastBackfillStartStep = 0
-        scratchLatch.reset()
+        scratchWorkerOrNull?.beginStroke()
     }
 
     // --- 低延迟预测光标与局部重绘状态 ---
@@ -1106,25 +1106,43 @@ class CanvasTouchView(context: Context) : View(context) {
     private val scratchMatrix = android.graphics.Matrix()
     private val scratchSrcPts = FloatArray(6)
     private val scratchDstPts = FloatArray(6)
-    private val scratchLatch = com.reverie.paint.model.RealInkPolicy.FailureLatch()
+    private val SCRATCH_FRESH_MS = 60L
 
     /** computePreviewStrokePath 写入的回填起点步数 (真墨草稿复用同一段真实样本) */
     private var lastBackfillStartStep = 0
 
+    /** 引擎草稿后台渲染 (懒创建, 每视图一个线程) */
+    private var scratchWorkerOrNull: RealInkScratchWorker? = null
+    private val scratchWorker: RealInkScratchWorker
+        get() = scratchWorkerOrNull ?: RealInkScratchWorker { px, w, h, m, _ ->
+            // 主线程: 抬笔后或已离开 UI 安全区时丢弃
+            localIsTouching && tool == Tool.BRUSH &&
+                (frontBufferOverlay?.renderScratchPixels(px, w, h, m) == true)
+        }.also { scratchWorkerOrNull = it }
+    private val scratchDocToScreen = android.graphics.Matrix()
+    private val scratchRefSrc = floatArrayOf(0f, 0f, 1000f, 0f, 0f, 1000f)
+
+    /** 草稿 tile 最近 [SCRATCH_FRESH_MS] 内上过屏: UI 事件不再用戳印覆盖它 (前缓冲每次整层清空) */
+    private fun scratchTileFresh(): Boolean {
+        val w = scratchWorkerOrNull ?: return false
+        if (w.tripped) return false
+        val t = w.lastShownUptimeMs
+        return t > 0L && android.os.SystemClock.uptimeMillis() - t < SCRATCH_FRESH_MS
+    }
+
     /**
-     * 回填段 (真实采样点) 交给引擎用完整笔刷渲染并直出前缓冲。
-     * 不满足条件/原生不支持/失败时返回 false, 调用方走既有 STAMP/折线预览。
+     * 回填段 (真实采样点) 投递给后台线程, 由引擎用完整笔刷渲染后直出前缓冲。
+     * UI 线程只做坐标换算与拷贝 (微秒级), 不再同步调用 Krita paintop。
      */
-    private fun tryRenderEngineScratch(v: PaintViewModel): Boolean {
-        val overlay = frontBufferOverlay ?: return false
-        if (!com.reverie.paint.model.RealInkPolicy.engineScratchEligible(
-                v.frontBufferRealInkOnly, v.frontBufferEngineScratchEnabled, v.currentToolId, v.brushPaintOpId
-            )
-        ) return false
-        if (!com.reverie.paint.core.RealInkScratch.nativeAvailable || scratchLatch.tripped) return false
+    private fun submitEngineScratch(v: PaintViewModel) {
+        val reason = com.reverie.paint.model.RealInkPolicy.ineligibleReason(
+            v.frontBufferRealInkOnly, v.frontBufferEngineScratchEnabled, v.currentToolId, v.brushPaintOpId,
+            com.reverie.paint.core.RealInkScratch.nativeAvailable
+        )
+        val worker = scratchWorker
+        if (reason != null) { worker.noteSkip(reason); return }
         val steps = lastBackfillStartStep.coerceAtMost(com.reverie.paint.model.RealInkPolicy.MAX_SCRATCH_SAMPLES - 1)
-        if (steps <= 0) return false
-        val t0 = System.nanoTime()
+        if (steps <= 0) { worker.noteSkip("noBackfillSamples"); return }
         ensureViewTransform()
         var n = 0
         for (step in steps downTo 0) {
@@ -1135,27 +1153,14 @@ class CanvasTouchView(context: Context) : View(context) {
             scratchP[n] = if (v.brushPressureEnabled) touchHistoryP[idx] else 1f
             n++
         }
-        val scratch = com.reverie.paint.core.RealInkScratch
-        if (!scratch.render(scratchDocXY, scratchP, n)) {
-            scratchLatch.onFailure()
-            return false
-        }
-        scratchLatch.onSuccess()
-        // tile 像素 (0,0)/(w,0)/(0,h) → 文档坐标 → 屏幕坐标, 三点仿射 (含旋转/翻转/缩放)
-        val w = scratch.width.toFloat()
-        val h = scratch.height.toFloat()
-        scratchSrcPts[0] = 0f; scratchSrcPts[1] = 0f
-        scratchSrcPts[2] = w; scratchSrcPts[3] = 0f
-        scratchSrcPts[4] = 0f; scratchSrcPts[5] = h
+        // 文档→屏幕仿射 (含旋转/翻转/缩放), 三参考点求解
         for (k in 0 until 3) {
-            viewTransform.docToScreen(scratch.docX + scratchSrcPts[k * 2], scratch.docY + scratchSrcPts[k * 2 + 1], pointScratch)
+            viewTransform.docToScreen(scratchRefSrc[k * 2], scratchRefSrc[k * 2 + 1], pointScratch)
             scratchDstPts[k * 2] = pointScratch[0]
             scratchDstPts[k * 2 + 1] = pointScratch[1]
         }
-        scratchMatrix.setPolyToPoly(scratchSrcPts, 0, scratchDstPts, 0, 3)
-        if (!overlay.renderScratchPixels(scratch.pixels, scratch.width, scratch.height, scratchMatrix)) return false
-        PerfTrace.tickNanos("realink.scratch", System.nanoTime() - t0)
-        return true
+        scratchDocToScreen.setPolyToPoly(scratchRefSrc, 0, scratchDstPts, 0, 3)
+        worker.submit(scratchDocXY, scratchP, n, scratchDocToScreen)
     }
 
     /**
@@ -1289,8 +1294,9 @@ class CanvasTouchView(context: Context) : View(context) {
         // tip 不可解码 (如 GIH 动画笔尖) 时回落 TIER_2 发丝线, 而非直接无预览。
         previewUsedStamp = false
         // 真墨模式: TIER_2 发丝导引线与真笔刷差异最大, 改用真实笔尖戳印 (位置/宽度均为真实采样)
+        // 真墨模式一律走戳印 (任何分级): 折线 = 纯色"假墨条", 与真笔刷对不上
         val stampEligible = fidelityTier == PaintViewModel.PredictionFidelityTier.STAMP ||
-            (v.frontBufferRealInkOnly && fidelityTier == PaintViewModel.PredictionFidelityTier.TIER_2)
+            v.frontBufferRealInkOnly
         if (stampEligible) {
             if (computeStampDabs(
                     v, backfillStartStep, hasExtension, endX, endY, curPos,
@@ -1301,6 +1307,8 @@ class CanvasTouchView(context: Context) : View(context) {
                 return true
             }
             // 回落: 走下方 TIER_2 发丝线逻辑
+            // 真墨模式绝不画纯色折线 (用户反馈"头部黑色条"): 无戳印可用 → 不画, 由引擎草稿负责
+            if (v.frontBufferRealInkOnly) return false
         }
 
         // ---- 3. 样式: 预览颜色/宽度对齐真墨, 消除"颜色浅"与笔触断裂的观感差 ----
@@ -2300,6 +2308,8 @@ class CanvasTouchView(context: Context) : View(context) {
     }
 
     override fun onDetachedFromWindow() {
+        scratchWorkerOrNull?.release()
+        scratchWorkerOrNull = null
         releaseLargeBitmapTiles()
         removeCallbacks(quickShapeHold)
         vm?.quickShapeCapture = null
@@ -5208,7 +5218,13 @@ class CanvasTouchView(context: Context) : View(context) {
                         val curPos = Offset(curX, curY)
                         var drew = false
                         // 不再要求 hasPredictedScreenPoint: 预测被抑制时回填段照画
-                        if (computePreviewStrokePath(curPos, previewStrokePath)) {
+                        val hasPreview = computePreviewStrokePath(curPos, previewStrokePath)
+                        val realInk = v.frontBufferRealInkOnly
+                        if (realInk && !isHoverOverUi(curX, curY)) submitEngineScratch(v)
+                        if (realInk && !hasPreview && scratchTileFresh()) {
+                            // 无戳印可画, 但后台草稿 tile 仍在屏上: 保留, 不清
+                            drew = true
+                        } else if (hasPreview) {
                             // 前缓冲层位于窗口 z 序最顶层 (setZOrderOnTop): 笔尖或前瞻端点落在
                             // 工具栏/浮窗等 UI 区域上时跳过绘制, 避免预览墨迹盖在 UI 之上。
                             // 端点判定不够: 高速运笔一帧可跨过顶栏, 包络相交做保守整段判定
@@ -5217,8 +5233,8 @@ class CanvasTouchView(context: Context) : View(context) {
                                 isHoverOverUi(previewTipEndX, previewTipEndY) ||
                                 previewEnvelopeHitsUi(curX, curY)
                             if (!overUi) {
-                                if (tryRenderEngineScratch(v)) {
-                                    // 真墨草稿: 引擎完整笔刷像素已直出
+                                if (realInk && scratchTileFresh()) {
+                                    // 真墨草稿 tile 由后台线程直出, 此处不用戳印覆盖
                                 } else if (previewUsedStamp && previewStampBitmap != null && previewStampCount > 0) {
                                     // STAMP 分级: 真实笔尖戳印直出 (水彩/纹理/绘画类)
                                     frontBufferOverlay?.renderStampPreview(
@@ -5227,7 +5243,7 @@ class CanvasTouchView(context: Context) : View(context) {
                                         previewStampSize, previewStampAlpha,
                                         previewStampCount
                                     )
-                                } else {
+                                } else if (!realInk) {
                                     frontBufferOverlay?.renderPreviewPath(previewStrokePath, previewStrokeWidth, previewStrokeColor)
                                 }
                                 drew = true

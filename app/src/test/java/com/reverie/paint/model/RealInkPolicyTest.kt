@@ -31,4 +31,36 @@ class RealInkPolicyTest {
         latch.onSuccess()
         assertFalse(latch.tripped)
     }
+
+    @Test
+    fun breakerIgnoresWarmupNulls() {
+        val b = RealInkPolicy.StrokeBreaker(warmupMs = 250L, nullThreshold = 3)
+        repeat(50) { b.onResult(false, 10L, 1.0) }
+        assertFalse(b.tripped)
+        repeat(2) { b.onResult(false, 300L, 1.0) }
+        assertFalse(b.tripped)
+        b.onResult(true, 300L, 1.0)
+        repeat(2) { b.onResult(false, 300L, 1.0) }
+        assertFalse(b.tripped)
+        b.onResult(false, 300L, 1.0)
+        assertTrue(b.tripped)
+    }
+
+    @Test
+    fun breakerTripsOnSlowRenders() {
+        val b = RealInkPolicy.StrokeBreaker(slowRenderMs = 12.0, slowThreshold = 2)
+        b.onResult(true, 0L, 20.0)
+        assertFalse(b.tripped)
+        b.onResult(true, 0L, 20.0)
+        assertTrue(b.tripped)
+        b.reset()
+        assertFalse(b.tripped)
+    }
+
+    @Test
+    fun ineligibleReasons() {
+        org.junit.Assert.assertNull(RealInkPolicy.ineligibleReason(true, true, "brush", "paintbrush", true))
+        org.junit.Assert.assertEquals("realInkOff", RealInkPolicy.ineligibleReason(false, true, "brush", "paintbrush", true))
+        org.junit.Assert.assertEquals("nativeMissing", RealInkPolicy.ineligibleReason(true, true, "brush", "paintbrush", false))
+    }
 }
