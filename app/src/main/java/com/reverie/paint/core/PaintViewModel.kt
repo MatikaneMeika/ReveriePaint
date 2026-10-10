@@ -4070,6 +4070,7 @@ class PaintViewModel : ViewModel() {
     @Volatile internal var displayBufferInvalid = false
 
     @Volatile internal var renderScheduled = false
+    @Volatile private var lastFlipNs = 0L
 
     /** Pending multi-layer target set from the last replayed T_*_LAYERS
      *  recording event; consumed once by the following BEGIN / MOVE_CONTENT. */
@@ -4290,6 +4291,8 @@ class PaintViewModel : ViewModel() {
     // lost pressure detail. Buffers are allocated once: zero allocation on
     // the hot path (架构铁律 §4).
     companion object {
+        /** 引擎渲染→翻转的最小间隔 (≈ 一个 vsync); 由 CanvasTouchView 按屏幕最高刷新率设置 */
+        @JvmStatic @Volatile var renderMinIntervalNs = 7_800_000L
         @Volatile var currentInstance: PaintViewModel? = null
         const val SMOOTHING_OFF = 0
         const val SMOOTHING_BASIC = 1
@@ -4710,7 +4713,11 @@ class PaintViewModel : ViewModel() {
                 doRender()
             }
         pendingRenderRunnable = r
-        h.post(r)
+        // 每个 vsync 最多翻转一次: 每次翻转 = HWUI 整张纹理重传, 实测 flip 290/s
+        // (> 屏幕刷新率) 意味着一半以上的重传从未上屏, 白白占用带宽并推迟真正上屏的那帧。
+        val sinceNs = System.nanoTime() - lastFlipNs
+        val waitNs = renderMinIntervalNs - sinceNs
+        if (waitNs > 0L) h.postDelayed(r, (waitNs / 1_000_000L).coerceIn(1L, 16L)) else h.post(r)
     }
 
     @Volatile internal var liquifyPresentationGesture = 0L
@@ -4820,6 +4827,7 @@ class PaintViewModel : ViewModel() {
         }
 
         // Swap front and back buffers
+        lastFlipNs = System.nanoTime()
         val rendered = back
         backBuffer = front
         frontBuffer = rendered

@@ -323,6 +323,8 @@ object PerfTrace {
     private fun appendInkLine(sb: StringBuilder) {
         sb.append("墨迹(距输入 p50/p95 ms)")
         for (i in 0 until INK_N) {
+            // 每行两个阶段, 避免 HUD 横向截断
+            if (i % 2 == 0) sb.append("\n ")
             sb.append(' ').append(INK_NAMES[i]).append(' ')
             val p = inkPercentilesMs(i)
             if (p == null) sb.append("--") else sb.append("%.1f/%.1f".format(p.first, p.second))

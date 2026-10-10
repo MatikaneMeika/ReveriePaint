@@ -2131,6 +2131,8 @@ class CanvasTouchView(context: Context) : View(context) {
         val screenDiag = kotlin.math.hypot(dm.widthPixels.toFloat(), dm.heightPixels.toFloat())
         universalPredictor.setScreenDiagonal(screenDiag)
         universalPredictor.setRefreshRate(maxFps)
+        com.reverie.paint.core.PaintViewModel.renderMinIntervalNs =
+            (1_000_000_000.0 / maxFps.coerceIn(30f, 240f)).toLong() - 500_000L
         if (oplusPredictor == null && com.reverie.paint.core.stylus.OppoOcsStylusClient.isDeviceSupported()) {
             try {
                 val p = OplusMotionPredictor()
@@ -2627,6 +2629,8 @@ class CanvasTouchView(context: Context) : View(context) {
                                     )
                                     canvas.drawBitmap(bmp, null, stampDstRect, stampPaint)
                                 }
+                            } else if (v.frontBufferRealInkOnly) {
+                                // 真墨模式: 不画实心引导线 (曾在软件回退里漏画成灰/黑细线)
                             } else {
                                 tipShaderPaint.shader = null
                                 tipShaderPaint.color = previewStrokeColor
@@ -2646,7 +2650,7 @@ class CanvasTouchView(context: Context) : View(context) {
                     hasActivePredictedTip = false
                 }
             }
-        } else if (v.stylusStrokePredictionEnabled && v.isCurrentBrushPredictionEligible) {
+        } else if (!v.frontBufferRealInkOnly && v.stylusStrokePredictionEnabled && v.isCurrentBrushPredictionEligible) {
             // 上游原版: OEM 硬件预测尾线 (实时预测未来 15~20ms 笔尖切线, 微羽化渐隐)
             val isDrawingTool = tool == Tool.BRUSH || tool == Tool.ERASER
             if (localIsTouching && isDrawingTool && hasPredictedScreenPoint && hasLocalCursorPos) {
@@ -5274,7 +5278,7 @@ class CanvasTouchView(context: Context) : View(context) {
                             else Float.NaN
                         )
                     }
-                } else if (!v.frontBufferPredictionEnabled && isStylus && v.isCurrentBrushPredictionEligible) {
+                } else if (!v.frontBufferRealInkOnly && !v.frontBufferPredictionEnabled && isStylus && v.isCurrentBrushPredictionEligible) {
                     // OEM 硬件前向预测尾线 (抵消 144Hz 屏幕 1~2 帧物理上屏延迟)
                     val vp = vivoPredictor
                     if (vp != null && vp.isEstimateEnable) {
