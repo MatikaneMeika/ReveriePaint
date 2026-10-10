@@ -119,6 +119,8 @@ public:
     // content painted on a clipped layer is masked by the next layer's alpha
     bool layerClipped(int index) const;
     void setLayerClipped(int index, bool clipped);
+    bool layerAlphaInherited(int index) const;
+    void setLayerAlphaInherited(int index, bool enable);
     void flipLayerHorizontal(int index);
     void flipLayerVertical(int index);
     // Canvas flip: mirror every paintable layer (incl. background/locked and
@@ -162,6 +164,8 @@ public:
     void compositeLayersRange(KisPaintDeviceSP out, int startIdx, int endIdx, const QRect &r,
                               int excludeIdx = -1);
     void compositeStrokeLayer(KisPaintDeviceSP out, const LayerEntry &e, const QRect &r);
+    KisPaintDeviceSP borrowScratchDevice(const QRect &r);
+    void returnScratchDevice();
     void applyStrokeParamsInternal(int index, int size, quint32 color, int position, int opacity);
     // Multi-layer type creation
     enum LayerType {
@@ -210,6 +214,10 @@ public:
     // 原生填充层换色 (KisGeneratorLayer + reverie-solid-color); 非填充层返回 false
     bool setFillLayerColor(int index, quint32 colorArgb);
     quint32 getFillLayerColor(int index) const;
+    bool setFillLayerPattern(int index, const QByteArray &png);
+    bool floodFillPatternAt(int x, int y, int tolerance, bool sampleMerged, int expand,
+                            int feather, int closeGap, double opacity, const QString &compositeOp,
+                            const QByteArray &png);
     // 描边图层属性与栅格化
     bool isLayerStroke(int index) const;
     bool setLayerStrokeParams(int index, int size, quint32 color, int position, int opacity);
@@ -499,6 +507,7 @@ public:
         bool alphaLocked = false;     // preserve alpha (transparency lock)
         int colorLabel = 0;           // color label index 0-9
         bool clipped = false;         // clipping mask onto the layer below
+        bool alphaInherited = false;  // inherit alpha from layers below (Krita native)
         bool background = false;      // background layer (index 0)
         bool isStrokeLayer = false;   // stroke layer with layer style
         int strokeSize = 6;
@@ -764,14 +773,14 @@ public:
     void waitForDocumentTasks();
 
     // Strokes (touch input; coordinates in document space)
-    void touchStrokeStart(qreal x, qreal y, qreal pressure, qreal tiltX = 0.0, qreal tiltY = 0.0, qreal rotation = 0.0);
+    void touchStrokeStart(qreal x, qreal y, qreal pressure, qreal tiltX = 0.0, qreal tiltY = 0.0, qreal rotation = 0.0, qreal timeSeconds = -1.0);
 
     // Application-level undo/redo via per-stroke layer snapshots.
     // Krita's command stack needs the full KisTransaction pipeline; for the
     // MVP we snapshot the current layer before each stroke and restore on
     // undo/redo. (ReverieUndoStore still backs image-level commands.)
     bool canUndo() const;
-    bool canRedo() const { return m_redoCount > 0; }
+    bool canRedo() const;
     void undo();
     void redo();
     void beginUndoMacro(const QString &text = QString());
@@ -786,9 +795,10 @@ public:
     // Excess commands are freed from the bottom of the stack on the next
     // push; applies to the live store and to every document created later.
     void setUndoLimit(int limit);
+    void resetStrokeCounter() { m_strokeCounter = 0; }
     // Returns true when this call flushed a batch and painted new ink (used
     // by the Kotlin transport to render only after real paint work).
-    bool touchStrokeMove(qreal x, qreal y, qreal pressure, qreal tiltX = 0.0, qreal tiltY = 0.0, qreal rotation = 0.0);
+    bool touchStrokeMove(qreal x, qreal y, qreal pressure, qreal tiltX = 0.0, qreal tiltY = 0.0, qreal rotation = 0.0, qreal timeSeconds = -1.0);
     // Flush the pending stroke start as an ink dot when no movement arrived
     // yet (hold-still / slow-start latency fix). No-op once the stroke moved.
     // Returns true when a dot was painted.
@@ -845,6 +855,14 @@ public:
     void setBrushAntiAliasing(int level);
     void setPresetIsEraser(bool eraser);
     bool setBrushTipAsset(const QString &assetName);
+    void setBrushTexture(bool enabled, qreal scale, qreal strength, const QString &mode, const QString &patternName = QString());
+    bool scratchpadStart(int w, int h);
+    bool scratchpadStrokeStart(qreal x, qreal y, qreal pressure, qreal tiltX = 0.0, qreal tiltY = 0.0, qreal rotation = 0.0);
+    bool scratchpadStrokeMove(qreal x, qreal y, qreal pressure, qreal tiltX = 0.0, qreal tiltY = 0.0, qreal rotation = 0.0);
+    void scratchpadStrokeEnd();
+    void scratchpadClear();
+    bool scratchpadRender(quint8 *buffer, int w, int h, int stride);
+    void scratchpadEnd();
     bool hasPendingStrokeSamples() const { return m_strokeSamples.size() > m_strokeCarryCount; }
     int currentBrushPreset() const { return m_brushPresetIndex; }
 
@@ -866,7 +884,7 @@ public:
     bool exportPsd(const QString &path);
     // 兼容 KRA 语义的图层树元数据 (定义于 ReverieCoreLayerIO.cpp)
     void writeLayersXml(QString *out);
-    static bool loadLayersXmlTree(const QByteArray &xmlData, KisImageSP image, KoStore *store, bool *bgVisible);
+    static bool loadLayersXmlTree(const QByteArray &xmlData, KisImageSP image, KoStore *store, bool *bgVisible, bool *outHealed = nullptr);
     bool saveRevp(const QString &path, const QString &extraMetaJson = QString(),                  const QByteArray &recordingBlob = QByteArray());
     bool saveRevpAsync(const QString &path, const QString &extraMetaJson = QString(),                       const QByteArray &recordingBlob = QByteArray());
 
@@ -874,6 +892,7 @@ public:
      *  out 至少 8 个 qint64: [total, snapshot, encode, write, pngCount, pngBytes, fileBytes, async]。 */
     void revpSaveStats(qint64 *out);
     bool loadRevp(const QString &path);
+    bool isLastLoadHealed() const { return m_lastLoadHealed; }
     static bool loadKraTree(const QByteArray &maindocBytes, KisImageSP image, KoStore *store, const QString &docName, bool *bgVisible);
     bool loadPsd(const QString &path);
     bool saveKra(const QString &path);
@@ -929,7 +948,7 @@ private:
     // convertToQImage returns transparent black. Krita itself uses the
     // refresh-walker + async-merger pair for exactly this case.
     // Returns true when a flush painted ink in this call.
-    bool appendStrokeSample(const QPointF &imgPos, qreal pressure, qreal tiltX = 0.0, qreal tiltY = 0.0, qreal rotation = 0.0);
+    bool appendStrokeSample(const QPointF &imgPos, qreal pressure, qreal tiltX = 0.0, qreal tiltY = 0.0, qreal rotation = 0.0, qreal timeSeconds = -1.0);
     void endStrokeBatch();
 
     struct StrokeSample {
@@ -1196,6 +1215,7 @@ private:
     QColor m_strokeColor;
     qreal m_strokeOpacity = 1.0;
     bool m_drawing = false;
+    bool m_lastLoadHealed = false;
 
     // ------------------------------------------------------------------
     // 笔触进行中的洋葱皮叠加 (onion skin during stroke)
@@ -1230,6 +1250,10 @@ private:
     KisPaintDeviceSP m_strokeMergeScratch;
     KisPaintDeviceSP m_strokeOutScratch;
 
+    // 复用暂存设备池 (组图层递归合成/剪切蒙版栈式复用, 零堆内存分配)
+    QVector<KisPaintDeviceSP> m_scratchPool;
+    int m_scratchPoolIndex{0};
+
     /** 取(必要时建)某图层在笔触叠加用的洋葱皮投影; 未开洋葱皮返回空 */
     KisPaintDeviceSP strokeOnionProjection(int layerIndex);
 
@@ -1248,6 +1272,16 @@ private:
         m_strokeOnionCacheDirty = true;
         m_strokeOnionCacheExtent.clear();
     }
+
+    // Brush Studio isolated scratchpad
+    KisPaintDeviceSP m_scratchpadDev;
+    KisPainter *m_scratchpadPainter{nullptr};
+    KisDistanceInformation *m_scratchpadDistInfo{nullptr};
+    int m_scratchpadWidth{0};
+    int m_scratchpadHeight{0};
+    bool m_scratchpadStrokeActive{false};
+    StrokeSample m_scratchpadLastSample;
+
     // Smudge engine state (colorsmudge paintop)
     qreal m_smudgeRate = 0.5;   // color mixing rate -> ColorRateValue/MixValue
     qreal m_smudgeLength = 0.5; // smudge length -> SmudgeRateValue
@@ -1313,6 +1347,8 @@ private:
     int m_redoCount = 0;   // redo depth tracked locally (store hides it)
     int m_macroDepth = 0;  // nested macro transaction depth
     bool m_undoCaptureEnabled = true; // false during replay (no history growth)
+    quint64 m_strokeCounter = 0;
+    qreal m_lastSimulatedFlushTime = 0.0;
     // Deferred stroke transaction: created at the first real flush (after
     // the stroke device exists), committed at stroke end, discarded on
     // cancel - taps and no-paint strokes never create an undo command.
@@ -1323,6 +1359,8 @@ private:
                                                       const QByteArray &lut = QByteArray());
     // 纯色填充层配置组装 (ReverieCoreGenerators.cpp)
     static KisFilterConfigurationSP reverieMakeSolidColorConfig(quint32 rgba);
+    static KisFilterConfigurationSP reverieMakePatternConfig(const QByteArray &png);
+    bool applyFillGeneratorConfig(int index, KisFilterConfigurationSP config);
 
     // Filter backup devices for non-destructive live preview (single & multi-layer)
     struct FilterBackupEntry {

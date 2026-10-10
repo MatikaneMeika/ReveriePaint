@@ -9,23 +9,17 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
@@ -38,13 +32,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.reverie.paint.R
+import com.reverie.paint.core.FontManager
 import com.reverie.paint.core.PaintViewModel
 import com.reverie.paint.core.commitTypographyToCanvas
 import com.reverie.paint.ui.components.ReTextButton
@@ -53,7 +48,7 @@ import dev.chrisbanes.haze.HazeState
 import kotlin.math.roundToInt
 
 /**
- * 画布内富文本排版控制悬浮面板与操作栏
+ * 画布内富文本排版控制悬浮面板与操作栏 (紧凑胶囊栏 + 折叠抽屉规范化设计)
  */
 @Composable
 fun TypographyPanel(
@@ -63,85 +58,119 @@ fun TypographyPanel(
     modifier: Modifier = Modifier,
 ) {
     val cfg = vm.typographyConfig
+    val context = LocalContext.current
     var propsOpen by remember { mutableStateOf(false) }
+    var fontPickerOpen by remember { mutableStateOf(false) }
     val scrollState = rememberScrollState()
+
+    if (fontPickerOpen) {
+        FontPickerDialog(vm = vm, onDismiss = { fontPickerOpen = false })
+    }
+
+    val currentFontDisplayShort = remember(cfg.fontFamilyName, cfg.fontPath) {
+        val full = FontManager.resolveDisplayName(context, cfg.fontFamilyName, cfg.fontPath)
+        full.substringBefore(" (").take(5)
+    }
+
+    val orientationOptions = listOf(
+        ToolDropdownItemData(0, R.drawable.ic_text, stringResource(R.string.typography_horizontal)),
+        ToolDropdownItemData(1, R.drawable.ic_text, stringResource(R.string.typography_vertical_rtl)),
+        ToolDropdownItemData(2, R.drawable.ic_text, stringResource(R.string.typography_vertical_ltr)),
+    )
+
+    val alignOptions = listOf(
+        ToolDropdownItemData(0, R.drawable.ic_text, stringResource(R.string.typography_align_left)),
+        ToolDropdownItemData(1, R.drawable.ic_text, stringResource(R.string.typography_align_center)),
+        ToolDropdownItemData(2, R.drawable.ic_text, stringResource(R.string.typography_align_right)),
+    )
 
     ToolFloatPanel(modifier = modifier, vm = vm, hazeState = hazeState) {
         Column(
             verticalArrangement = Arrangement.spacedBy(8.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            // 顶层水平操作栏
+            // 主胶囊操作栏 (统一规格图标动作按钮与气泡下拉)
             Row(
                 modifier = Modifier.horizontalScroll(scrollState),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
             ) {
-                // 1. 编辑文字内容按钮
+                // 1. 编辑文字内容
                 ToolActionButton(
                     iconRes = R.drawable.ic_text,
-                    label = androidx.compose.ui.res.stringResource(R.string.typography_edit_text),
+                    label = stringResource(R.string.typography_edit_text),
                     onClick = onOpenTextDialog,
                 )
 
-                // 2. 粗体 / 斜体 / 下划线
-                ToolFloatChip(
-                    label = "B",
-                    selected = cfg.isBold,
-                    onClick = { vm.typographyConfig = cfg.copy(isBold = !cfg.isBold) },
-                )
-                ToolFloatChip(
-                    label = "I",
-                    selected = cfg.isItalic,
-                    onClick = { vm.typographyConfig = cfg.copy(isItalic = !cfg.isItalic) },
-                )
-                ToolFloatChip(
-                    label = "U",
-                    selected = cfg.isUnderline,
-                    onClick = { vm.typographyConfig = cfg.copy(isUnderline = !cfg.isUnderline) },
+                // 2. 字体选择入口 (显示当前字体简称，带右下小三角指示)
+                ToolDropdownTriggerButton(
+                    iconRes = R.drawable.ic_text,
+                    label = currentFontDisplayShort,
+                    expanded = fontPickerOpen,
+                    onClick = { fontPickerOpen = true },
                 )
 
-                // 3. 对齐方式
-                ToolFloatChip(
-                    label = androidx.compose.ui.res.stringResource(R.string.typography_align_left),
-                    selected = cfg.alignment == 0,
-                    onClick = { vm.typographyConfig = cfg.copy(alignment = 0) },
-                )
-                ToolFloatChip(
-                    label = androidx.compose.ui.res.stringResource(R.string.typography_align_center),
-                    selected = cfg.alignment == 1,
-                    onClick = { vm.typographyConfig = cfg.copy(alignment = 1) },
-                )
-                ToolFloatChip(
-                    label = androidx.compose.ui.res.stringResource(R.string.typography_align_right),
-                    selected = cfg.alignment == 2,
-                    onClick = { vm.typographyConfig = cfg.copy(alignment = 2) },
+                // 3. 排版方向与换列模式下拉 (横排 / 竖排·右至左 / 竖排·左至右)
+                ToolBubbleDropdown(
+                    items = orientationOptions,
+                    selected = if (!cfg.isVertical) 0 else if (cfg.verticalRtl) 1 else 2,
+                    labelOverride = if (!cfg.isVertical) {
+                        stringResource(R.string.typography_horizontal)
+                    } else if (cfg.verticalRtl) {
+                        stringResource(R.string.typography_vertical)
+                    } else {
+                        stringResource(R.string.typography_vertical)
+                    },
+                    iconOverride = R.drawable.ic_text,
+                    onSelect = { mode ->
+                        when (mode) {
+                            0 -> vm.typographyConfig = cfg.copy(isVertical = false)
+                            1 -> vm.typographyConfig = cfg.copy(isVertical = true, verticalRtl = true)
+                            2 -> vm.typographyConfig = cfg.copy(isVertical = true, verticalRtl = false)
+                        }
+                    },
                 )
 
-                // 4. 展开详细排版属性
+                // 4. 对齐方式下拉 (左 / 中 / 右)
+                ToolBubbleDropdown(
+                    items = alignOptions,
+                    selected = cfg.alignment,
+                    labelOverride = when (cfg.alignment) {
+                        1 -> stringResource(R.string.typography_align_center)
+                        2 -> stringResource(R.string.typography_align_right)
+                        else -> stringResource(R.string.typography_align_left)
+                    },
+                    iconOverride = R.drawable.ic_text,
+                    onSelect = { vm.typographyConfig = cfg.copy(alignment = it) },
+                )
+
+                // 5. 属性抽屉开关 (字号、字距、行距、样式、磁吸)
                 ToolActionButton(
                     iconRes = R.drawable.ic_sliders,
-                    label = if (propsOpen) androidx.compose.ui.res.stringResource(R.string.typography_collapse) else androidx.compose.ui.res.stringResource(R.string.typography_props),
-                    active = propsOpen,
+                    label = if (propsOpen) stringResource(R.string.typography_collapse) else stringResource(R.string.typography_props),
+                    active = propsOpen || cfg.isBold || cfg.isItalic || cfg.isUnderline,
                     onClick = { propsOpen = !propsOpen },
                 )
 
-                // 5. 完成 (✔) 与 取消 (✕)
+                // 6. 完成 (✔) 与 取消 (✕)
                 ToolActionButton(
                     iconRes = R.drawable.ic_check,
-                    label = androidx.compose.ui.res.stringResource(R.string.confirm),
+                    label = stringResource(R.string.confirm),
                     primary = true,
                     onClick = { vm.commitTypographyToCanvas() },
                 )
                 ToolActionButton(
                     iconRes = R.drawable.ic_x,
-                    label = androidx.compose.ui.res.stringResource(R.string.cancel),
+                    label = stringResource(R.string.cancel),
                     danger = true,
-                    onClick = { vm.isTypographyEditing = false },
+                    onClick = {
+                        vm.isTypographyEditing = false
+                        vm.typographySnapGuides = emptyList()
+                    },
                 )
             }
 
-            // 展开的纵向属性抽屉 (字体、字号、字间距、行间距)
+            // 平滑展开的纵向精密属性抽屉 (样式、字号、字间距、行距、磁吸)
             AnimatedVisibility(
                 visible = propsOpen,
                 enter = fadeIn() + expandVertically(),
@@ -153,35 +182,44 @@ fun TypographyPanel(
                         .widthIn(min = 280.dp, max = 340.dp)
                         .padding(horizontal = 4.dp, vertical = 2.dp),
                 ) {
-                    // 字体族选择
+                    // 样式 (B / I / U) 与磁吸开关行
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        listOf(
-                            androidx.compose.ui.res.stringResource(R.string.typography_font_default_short) to "default",
-                            androidx.compose.ui.res.stringResource(R.string.typography_font_serif_short) to "serif",
-                            androidx.compose.ui.res.stringResource(R.string.typography_font_monospace_short) to "monospace",
-                            androidx.compose.ui.res.stringResource(R.string.typography_font_cursive_short) to "cursive",
-                        ).forEach { (short, id) ->
-                            val sel = cfg.fontFamilyName == id || (id == "default" && cfg.fontFamilyName == "系统默认") || (id == "serif" && cfg.fontFamilyName == "衬线体") || (id == "monospace" && cfg.fontFamilyName == "等宽体") || (id == "cursive" && cfg.fontFamilyName == "手写体")
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(if (sel) Morandi.accent else Morandi.border.copy(alpha = 0.35f))
-                                    .clickable { vm.typographyConfig = cfg.copy(fontFamilyName = id) }
-                                    .padding(vertical = 5.dp),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Text(short, color = if (sel) Color.White else Morandi.text, fontSize = 11.sp)
-                            }
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            ToolFloatChip(
+                                label = "B",
+                                selected = cfg.isBold,
+                                onClick = { vm.typographyConfig = cfg.copy(isBold = !cfg.isBold) },
+                            )
+                            ToolFloatChip(
+                                label = "I",
+                                selected = cfg.isItalic,
+                                onClick = { vm.typographyConfig = cfg.copy(isItalic = !cfg.isItalic) },
+                            )
+                            ToolFloatChip(
+                                label = "U",
+                                selected = cfg.isUnderline,
+                                onClick = { vm.typographyConfig = cfg.copy(isUnderline = !cfg.isUnderline) },
+                            )
                         }
+
+                        ToolFloatChip(
+                            label = stringResource(R.string.typography_snap),
+                            selected = cfg.snapEnabled,
+                            onClick = {
+                                val next = !cfg.snapEnabled
+                                vm.typographyConfig = cfg.copy(snapEnabled = next)
+                                if (!next) vm.typographySnapGuides = emptyList()
+                            },
+                        )
                     }
 
                     // 字号调节
                     ToolFloatSlider(
-                        label = androidx.compose.ui.res.stringResource(R.string.typography_font_size),
+                        label = stringResource(R.string.typography_font_size),
                         valueText = "${cfg.fontSize.roundToInt()}px",
                         range = 12f..240f,
                         value = cfg.fontSize,
@@ -191,7 +229,7 @@ fun TypographyPanel(
 
                     // 字间距调节
                     ToolFloatSlider(
-                        label = androidx.compose.ui.res.stringResource(R.string.typography_letter_spacing),
+                        label = stringResource(R.string.typography_letter_spacing),
                         valueText = "${cfg.letterSpacingSp.roundToInt()}px",
                         range = -4f..32f,
                         value = cfg.letterSpacingSp,
@@ -201,7 +239,7 @@ fun TypographyPanel(
 
                     // 行距倍数调节
                     ToolFloatSlider(
-                        label = androidx.compose.ui.res.stringResource(R.string.typography_line_height),
+                        label = stringResource(R.string.typography_line_height),
                         valueText = String.format("%.1fx", cfg.lineHeightMultiplier),
                         range = 0.8f..2.5f,
                         value = cfg.lineHeightMultiplier,
@@ -213,6 +251,7 @@ fun TypographyPanel(
         }
     }
 }
+
 
 /**
  * 文本内容快速输入与编辑对话框

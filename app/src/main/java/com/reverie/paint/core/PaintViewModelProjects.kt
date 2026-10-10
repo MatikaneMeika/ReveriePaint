@@ -47,6 +47,26 @@ internal fun PaintViewModel.autoSaveDir(): File {
     return dir
 }
 
+internal fun estimateProjectSaveBytes(w: Int, h: Int, layerCount: Int, currentFileSize: Long): Long {
+    val minBuffer = 50L * 1024 * 1024 // 50MB 安全保留余量
+    return if (currentFileSize > 0L) {
+        currentFileSize * 2 + minBuffer
+    } else {
+        val rawBytes = w.toLong() * h * 4 * layerCount.coerceAtLeast(1)
+        (rawBytes * 35 / 100) + minBuffer
+    }
+}
+
+internal fun checkProjectDiskSpace(targetFile: File, requiredBytes: Long): Boolean {
+    val dir = targetFile.parentFile?.takeIf { it.exists() } ?: targetFile
+    return try {
+        val stat = android.os.StatFs(dir.absolutePath)
+        stat.availableBytes >= requiredBytes
+    } catch (_: Throwable) {
+        true
+    }
+}
+
 // Blocking loading overlay state (used during canvas loading, saving, creating)
 
 /** Calls [onComplete] only after a successful save; failures keep the current document open and dirty state intact. */
@@ -54,6 +74,31 @@ internal fun PaintViewModel.saveProject(
     name: String,
     onComplete: (() -> Unit)? = null,
 ) {
+    val fileToSave =
+        currentProjectFile?.let { File(it) }?.takeIf { it.parentFile?.exists() == true && !it.name.contains(".autosave") }
+            ?: File(projectDir(), "$name.revp")
+    val finalFile =
+        if (fileToSave.nameWithoutExtension != name) {
+            File(fileToSave.parentFile, "$name.revp")
+        } else {
+            fileToSave
+        }
+
+    val requiredSpace = estimateProjectSaveBytes(
+        docWidth,
+        docHeight,
+        layers.size,
+        if (finalFile.exists()) finalFile.length() else 0L,
+    )
+    if (!checkProjectDiskSpace(finalFile, requiredSpace)) {
+        lowStorageMessage = getString(R.string.dialog_storage_insufficient_desc)
+        showLowStorageDialog = true
+        showActionToast(R.string.toast_project_save_low_storage, R.drawable.ic_alert_triangle)
+        return
+    }
+
+    val referenceProfile = referenceProfileId
+    val previousReferencePath = currentProjectFile
     tickPaintingTimer()
     isBlockingLoading = true
     blockingLoadingMessage = getString(R.string.project_saving_progress)
@@ -63,10 +108,16 @@ internal fun PaintViewModel.saveProject(
             isBlockingLoading = false
             val targetFile = savedFile
             if (targetFile == null) {
+                Breadcrumbs.record("Save", "saveProject FAILED for: $name")
                 showActionToast(R.string.toast_project_save_failed, R.drawable.ic_save)
                 return@runCore
             }
+            Breadcrumbs.record("Save", "saveProject SUCCESS: $name ($totalStrokes strokes)")
             currentProjectFile = targetFile.absolutePath
+            // Renaming from the save dialog moves this working association; do not let the
+            // previous file and the renamed artwork share a mutable reference selection.
+            previousReferencePath?.takeIf { it != targetFile.absolutePath }?.let(referenceStore::forgetPath)
+            referenceStore.bind(targetFile.absolutePath, referenceProfile)
             initialStrokeCount = totalStrokes
             isModified = false
             docName = name
@@ -76,6 +127,7 @@ internal fun PaintViewModel.saveProject(
             if (autoSaveFile.exists()) {
                 autoSaveFile.delete()
             }
+            referenceStore.forgetPath(autoSaveFile.absolutePath)
             val autoSaveTmp = File(autoSaveDir(), "$name.autosave.revp.tmp")
             if (autoSaveTmp.exists()) {
                 autoSaveTmp.delete()
@@ -132,13 +184,25 @@ internal fun PaintViewModel.autoSaveProject(isPeriodic: Boolean = true) {
     val touchView = com.reverie.paint.ui.painting.canvas.CanvasTouchView.activeTouchView
     if (touchView?.isInteracting == true || touchView?.isTransformActive == true) return
 
+    val name = docName.ifBlank { if (LanguageManager.isChinese()) "未命名作品" else "Untitled Artwork" }
+    val autoSaveFile = File(autoSaveDir(), "$name.autosave.revp")
+    val requiredSpace = estimateProjectSaveBytes(
+        docWidth,
+        docHeight,
+        layers.size,
+        if (autoSaveFile.exists()) autoSaveFile.length() else 0L,
+    )
+    if (!checkProjectDiskSpace(autoSaveFile, requiredSpace)) {
+        android.util.Log.w("RP_IO", "autoSaveProject: insufficient disk space ($requiredSpace bytes required), suspending autosave")
+        return
+    }
+
     isAutoSaving = true
     tickPaintingTimer()
-    val name = docName.ifBlank { if (LanguageManager.isChinese()) "未命名作品" else "Untitled Artwork" }
     val strokeCount = totalStrokes
     val layerCount = layers.size
     val currentMasterPath = currentProjectFile?.takeIf { !it.contains(".autosave") && !it.contains(".emergency") } ?: ""
-    val autoSaveFile = File(autoSaveDir(), "$name.autosave.revp")
+    val referenceProfile = referenceProfileId
 
     runCore(
         render = false,
@@ -183,7 +247,7 @@ internal fun PaintViewModel.autoSaveProject(isPeriodic: Boolean = true) {
         if (saved) {
             viewModelScope.launch(Dispatchers.IO) {
                 var waitMs = 0
-                while (waitMs < 10_000) {
+                while (waitMs < 60_000) {
                     delay(300)
                     waitMs += 300
                     if (autoSaveFile.exists() && autoSaveFile.lastModified() >= saveStartTime) {
@@ -193,6 +257,7 @@ internal fun PaintViewModel.autoSaveProject(isPeriodic: Boolean = true) {
                             false
                         }
                         if (isValid) {
+                            referenceStore.bind(autoSaveFile.absolutePath, referenceProfile)
                             AutoSaveHistoryManager.recordSnapshot(
                                 context = appContext,
                                 sourceRevpFile = autoSaveFile,
@@ -236,6 +301,7 @@ internal fun PaintViewModel.emergencySaveOnCrash() {
         val recBlob = try { recorder.serialize() } catch (_: Throwable) { null }
         val saved = ReverieCoreBridge.saveRevp(emergencyFile.absolutePath, extraJson, recBlob)
         if (saved && emergencyFile.exists() && emergencyFile.length() > 0) {
+            referenceStore.bind(emergencyFile.absolutePath, referenceProfileId)
             AutoSaveHistoryManager.recordSnapshot(
                 context = appContext,
                 sourceRevpFile = emergencyFile,
@@ -243,6 +309,7 @@ internal fun PaintViewModel.emergencySaveOnCrash() {
                 masterPath = masterPath,
                 strokeCount = totalStrokes,
                 layerCount = layers.size,
+                isEmergency = true,
             )
         }
     } catch (t: Throwable) {
@@ -257,17 +324,27 @@ internal fun PaintViewModel.restoreAutoSaveSnapshot(snapshot: AutoSaveSnapshot, 
 
     val targetFile: File
     val projectName: String
+    val cleanName = snapshot.displayName.removeSuffix(" (崩溃抢救)").removeSuffix(" (Emergency Rescue)")
     if (asCopy) {
-        projectName = "${snapshot.displayName} (副本)"
-        targetFile = File(projectDir(), "$projectName.revp")
+        val rootDir = projectDir()
+        var candidateName = "$cleanName (副本)"
+        var candidateFile = File(rootDir, "$candidateName.revp")
+        var copyIdx = 2
+        while (candidateFile.exists()) {
+            candidateName = "$cleanName (副本 $copyIdx)"
+            candidateFile = File(rootDir, "$candidateName.revp")
+            copyIdx++
+        }
+        projectName = candidateName
+        targetFile = candidateFile
         snapFile.copyTo(targetFile, overwrite = true)
     } else {
-        projectName = snapshot.displayName
         targetFile = if (snapshot.masterPath.isNotBlank() && File(snapshot.masterPath).parentFile?.exists() == true) {
             File(snapshot.masterPath)
         } else {
-            File(projectDir(), "$projectName.revp")
+            File(projectDir(), "$cleanName.revp")
         }
+        projectName = targetFile.nameWithoutExtension
         snapFile.copyTo(targetFile, overwrite = true)
     }
 
@@ -276,7 +353,11 @@ internal fun PaintViewModel.restoreAutoSaveSnapshot(snapshot: AutoSaveSnapshot, 
         filePath = targetFile.absolutePath,
         isAutoSaved = false,
     )
+    // Reference copies are local working aids, not historical snapshot contents.
+    // A restored copy starts without references; restoring the original may reuse its local mapping.
+    if (asCopy) referenceStore.forgetPath(targetFile.absolutePath)
     loadProject(project)
+    showActionToast(appContext.getString(R.string.toast_project_restored_autosave), R.drawable.ic_check)
 }
 
 internal fun PaintViewModel.discardAndExit() {
@@ -286,6 +367,7 @@ internal fun PaintViewModel.discardAndExit() {
     if (autoSaveFile.exists()) {
         autoSaveFile.delete()
     }
+    forgetLocalReferences(autoSaveFile)
     val autoSaveTmp = File(autoSaveDir(), "$name.autosave.revp.tmp")
     if (autoSaveTmp.exists()) {
         autoSaveTmp.delete()
@@ -294,6 +376,7 @@ internal fun PaintViewModel.discardAndExit() {
     if (emergencyFile.exists()) {
         emergencyFile.delete()
     }
+    forgetLocalReferences(emergencyFile)
     if (currentProjectFile != null && (currentProjectFile!!.contains(".autosave") || currentProjectFile!!.contains(".emergency"))) {
         val f = File(currentProjectFile!!)
         if (f.exists()) f.delete()
@@ -314,6 +397,8 @@ internal fun PaintViewModel.loadProject(p: com.reverie.paint.model.Project) {
     android.util.Log.d("RP_IO", "loadProject START: name=${p.name}, path=${p.filePath}, isAutoSaved=${p.isAutoSaved}")
     stopPaintingTimer()
     resetAnimationState()
+    resetProjectReferences(loading = true)
+    val referenceLoadSession = referenceSession
     // Navigate to painting page first, then show loading overlay while reading native file
     currentPage = Page.PAINTING
     isBlockingLoading = true
@@ -331,12 +416,25 @@ internal fun PaintViewModel.loadProject(p: com.reverie.paint.model.Project) {
     }
 
     var loadedCollapsedGroups: Set<String> = emptySet()
+    var documentLoaded = false
+    var isHealed = false
     runCore(
         after = {
+            if (!documentLoaded) {
+                Breadcrumbs.record("IO", "loadProject FAILED for: ${p.name}")
+                isBlockingLoading = false
+                showActionToast(R.string.toast_project_import_unsupported, R.drawable.ic_alert_triangle)
+                return@runCore
+            }
+            Breadcrumbs.record("IO", "loadProject SUCCESS: ${p.name} (healed=$isHealed)")
+            if (referenceSession == referenceLoadSession) {
+                if (documentLoaded) restoreLocalProjectReferences(p.filePath)
+                else referenceLoading = false
+            }
             collapsedGroupNames = loadedCollapsedGroups
             initialStrokeCount = p.strokeCount
             totalStrokes = p.strokeCount
-            isModified = isRecovered // 异常恢复的工程标记为未保存
+            isModified = isRecovered || isHealed // 异常恢复或自愈的工程标记为未保存
             docWidth = if (coreW > 0) coreW else p.width
             docHeight = if (coreH > 0) coreH else p.height
             docDpi = if (p.dpi > 0) p.dpi else 300
@@ -364,8 +462,10 @@ internal fun PaintViewModel.loadProject(p: com.reverie.paint.model.Project) {
             startPaintingTimer()
             if (isRecovered) {
                 showActionToast(R.string.toast_project_restored_autosave, R.drawable.ic_save)
+            } else if (isHealed) {
+                showActionToast(R.string.toast_project_healed_recovery, R.drawable.ic_alert_triangle)
             }
-            android.util.Log.d("RP_IO", "loadProject AFTER: docW=$docWidth, docH=$docHeight, currentProjectFile=$currentProjectFile, isModified=$isModified, layers=${layers.size}, currentLayer=$currentLayerIndex")
+            android.util.Log.d("RP_IO", "loadProject AFTER: docW=$docWidth, docH=$docHeight, currentProjectFile=$currentProjectFile, isModified=$isModified, layers=${layers.size}, currentLayer=$currentLayerIndex, isHealed=$isHealed")
         },
     ) {
         val file = java.io.File(p.filePath)
@@ -401,6 +501,8 @@ internal fun PaintViewModel.loadProject(p: com.reverie.paint.model.Project) {
                     ReverieCoreBridge.loadPng(file.absolutePath)
                 }
             if (ok) {
+                documentLoaded = true
+                isHealed = ReverieCoreBridge.isLastLoadHealed()
                 coreW = ReverieCoreBridge.docWidth()
                 coreH = ReverieCoreBridge.docHeight()
                 renderW = coreW
@@ -460,6 +562,7 @@ internal fun PaintViewModel.loadProject(p: com.reverie.paint.model.Project) {
                 }
                 android.util.Log.d("RP_IO", "loadProject OP OK: coreW=$coreW, coreH=$coreH, nativeLayers=${ReverieCoreBridge.layerCount()}, animated=$animated")
             } else {
+                mainHandler.post { if (referenceSession == referenceLoadSession) referenceLoading = false }
                 android.util.Log.e("RP_IO", "loadProject OP FAILED for ${file.absolutePath}")
             }
         }
@@ -487,7 +590,7 @@ internal fun PaintViewModel.moveProjectToFolder(
     val destDir = if (targetFolderName.isNullOrBlank()) root else File(root, targetFolderName)
     if (!destDir.exists()) destDir.mkdirs()
     val destFile = File(destDir, srcFile.name)
-    srcFile.renameTo(destFile)
+    if (srcFile.renameTo(destFile)) referenceStore.move(srcFile, destFile)
     refreshProjects()
 }
 
@@ -501,6 +604,7 @@ internal fun PaintViewModel.deleteProject(p: com.reverie.paint.model.Project) {
         val file = File(p.filePath)
         if (file.exists()) file.delete()
     }
+    if (!File(p.filePath).exists()) forgetLocalReferences(File(p.filePath))
     refreshProjects()
 }
 
@@ -516,7 +620,7 @@ internal fun PaintViewModel.renameProject(
             } else {
                 File(file.parentFile, "${newName.trim()}.${file.extension}")
             }
-        file.renameTo(target)
+        if (file.renameTo(target)) referenceStore.move(file, target)
     }
     refreshProjects()
 }
@@ -536,6 +640,7 @@ internal fun PaintViewModel.deleteProjects(projects: List<com.reverie.paint.mode
             val file = File(p.filePath)
             if (file.exists()) file.delete()
         }
+        if (!File(p.filePath).exists()) forgetLocalReferences(File(p.filePath))
     }
     refreshProjects()
 }
@@ -1114,6 +1219,7 @@ internal fun PaintViewModel.exportImageToGallery(
 }
 
 internal fun PaintViewModel.goHome() {
+    resetProjectReferences()
     recorder.endSession()
     stopPaintingTimer()
     // 动画播放与状态镜像: 离开绘画页彻底停止并重置动画状态, 避免耗电和跨画布状态残留
@@ -1187,6 +1293,7 @@ internal fun PaintViewModel.startPainting(
     animation: Boolean = false,
     animationFps: Int = DEFAULT_ANIMATION_FPS,
 ) {
+    resetProjectReferences()
     val actualName = name?.ifBlank { null } ?: generateNextProjectName()
     currentProjectFile = null // Reset so new artwork won't overwrite previous project file
     docName = actualName
@@ -1413,6 +1520,21 @@ private fun PaintViewModel.copyBundledBrushAssets(): Pair<File, File> {
         }
     } catch (e: Exception) {
         android.util.Log.e("ReveriePaint", "brush copy failed", e)
+    }
+
+    val patternDir = java.io.File(appContext.filesDir, "patterns")
+    try {
+        if (!patternDir.exists()) patternDir.mkdirs()
+        for (name in assets.list("patterns") ?: emptyArray()) {
+            val target = java.io.File(patternDir, name)
+            if (!target.exists()) {
+                assets.open("patterns/$name").use { input ->
+                    target.outputStream().use { output -> input.copyTo(output) }
+                }
+            }
+        }
+    } catch (e: Exception) {
+        android.util.Log.e("ReveriePaint", "pattern copy failed", e)
     }
 
     try {

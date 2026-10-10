@@ -10,6 +10,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.geometry.Offset
+import com.reverie.paint.model.RecordedBrushOverrides
 import com.reverie.paint.model.RecordingEvents.CONTEXT
 import com.reverie.paint.model.RecordingEvents.CONTEXT_EXT
 import com.reverie.paint.model.RecordingEvents.CONTEXT_FADE
@@ -29,6 +30,7 @@ import com.reverie.paint.model.RecordingEvents.L_BLEND
 import com.reverie.paint.model.RecordingEvents.L_CANVAS_FLIP_H
 import com.reverie.paint.model.RecordingEvents.L_CANVAS_FLIP_V
 import com.reverie.paint.model.RecordingEvents.L_FILL_LAYER
+import com.reverie.paint.model.RecordingEvents.L_ALPHA_INHERITED
 import com.reverie.paint.model.RecordingEvents.L_CLEAR
 import com.reverie.paint.model.RecordingEvents.L_CLIPPED
 import com.reverie.paint.model.RecordingEvents.L_COLOR_LABEL
@@ -136,6 +138,7 @@ class ReplaySession(
 
     internal val reader = RecordingReader(events)
     internal var currentMs = 0L
+    internal var lastPatternPng: ByteArray? = null
     internal var pendingStep: Runnable? = null
     internal var lastProgressWallMs = 0L
     internal var lastStepWallMs = 0L
@@ -333,11 +336,14 @@ private fun PaintViewModel.replayStepLocked(
     val targetMs = if (s.totalMs > 0) (s.currentMs + stepSimMs).coerceAtMost(s.totalMs) else Long.MAX_VALUE
 
     var hasEvents = false
-    while (r.remaining() > 0 && (s.totalMs == 0L || s.currentMs < targetMs)) {
+    // Several samples (especially generated shapes) may share the final millisecond.
+    // At the end, drain those zero-delta events too; otherwise currentMs == totalMs
+    // prevents all later ticks from consuming the remaining moves / stroke-end.
+    while (r.remaining() > 0 && (targetMs >= s.totalMs || s.currentMs < targetMs)) {
         val type = r.u8()
         val dt = r.varint()
         s.currentMs += dt
-        dispatchReplayLocked(type, r, render = false)
+        dispatchReplayLocked(s, type, r, render = false)
         hasEvents = true
         if (s.totalMs == 0L) break
     }
@@ -386,6 +392,7 @@ private fun PaintViewModel.updateReplayProgress(s: ReplaySession) {
 /** Runs inside a runCore op (render thread, before any replay dispatch). */
 internal fun PaintViewModel.resetReplayDocLocked(s: ReplaySession) {
     currentReplayPreset = -1
+    s.lastPatternPng = null
     currentReplayVersion = s.version
     val snap = s.snapshotFile
     var ok =
@@ -412,6 +419,8 @@ internal fun PaintViewModel.resetReplayDocLocked(s: ReplaySession) {
         renderW = -1
         renderH = -1
         setRenderViewport(coreW, coreH)
+        ReverieCoreBridge.resetStrokeCounter()
+        ReverieCoreBridge.setUndoLimit(maxUndoSteps)
         ReverieCoreBridge.setUndoCaptureEnabled(true)
         ReverieCoreBridge.clearUndoHistory()
         // Paint the initial frame right away so the canvas isn't stale
@@ -430,14 +439,15 @@ private fun PaintViewModel.seekLocked(
     val r = s.reader
     r.pos = 0
     s.currentMs = 0
-    while (r.remaining() > 0 && s.currentMs < target) {
+    // Seeking to 100% must include every event at the final timestamp as well.
+    while (r.remaining() > 0 && (fraction >= 1f || s.currentMs < target)) {
         val type = r.u8()
         val dt = r.varint()
         s.currentMs += dt
         // Seek fast-forwards the document state only: per-event renders are
         // suppressed (one immediate render at the end), otherwise dragging
         // the scrub bar queued hundreds of throttled renders and stalled.
-        dispatchReplayLocked(type, r, render = false)
+        dispatchReplayLocked(s, type, r, render = false)
     }
     s.elapsedMs = target
     s.progress = fraction
@@ -449,6 +459,7 @@ private fun PaintViewModel.seekLocked(
 // ---- Event dispatch (render thread; direct bridge calls, no re-recording) ----
 
 private fun PaintViewModel.dispatchReplayLocked(
+    s: ReplaySession,
     type: Int,
     r: RecordingReader,
     render: Boolean = true,
@@ -458,14 +469,16 @@ private fun PaintViewModel.dispatchReplayLocked(
             val x = r.f32()
             val y = r.f32()
             val p = r.f32()
-            ReverieCoreBridge.touchStrokeStart(x.toDouble(), y.toDouble(), p.toDouble())
+            val timeSec = if (s.totalMs > 0) (s.currentMs / 1000.0) else -1.0
+            ReverieCoreBridge.touchStrokeStartWithTime(x.toDouble(), y.toDouble(), p.toDouble(), timeSec)
         }
 
         STROKE_MOVE -> {
             val x = r.f32()
             val y = r.f32()
             val p = r.f32()
-            ReverieCoreBridge.touchStrokeMove(x.toDouble(), y.toDouble(), p.toDouble())
+            val timeSec = if (s.totalMs > 0) (s.currentMs / 1000.0) else -1.0
+            ReverieCoreBridge.touchStrokeMoveWithTime(x.toDouble(), y.toDouble(), p.toDouble(), timeSec)
             // Grow the stroke on screen: throttled render per move point,
             // same pacing the live painter uses while drawing (skipped while
             // seeking - seekLocked renders once at the end)
@@ -511,11 +524,14 @@ private fun PaintViewModel.dispatchReplayLocked(
             val secondaryColor = r.str()
             val airbrushEnabled = r.u8() != 0
             val airbrushRate = r.f32()
-            val isCustomized = if (currentReplayVersion >= 2) (r.u8() != 0) else false
-            val shouldApplyExtShape = (currentReplayPreset < 0) || isCustomized
+            val overrides = if (currentReplayVersion >= 2) r.u8() else 0
+            val shouldApplyExtShape = RecordedBrushOverrides.applyShape(currentReplayPreset, overrides)
             if (shouldApplyExtShape) {
                 ReverieCoreBridge.setBrushSoftness(softness.toDouble())
-                ReverieCoreBridge.setBrushSpacing(spacing.toDouble())
+                // Pressure/size edits also customize a preset, but do not change its native spacing.
+                if (RecordedBrushOverrides.applySpacing(currentReplayPreset, overrides)) {
+                    ReverieCoreBridge.setBrushSpacing(spacing.toDouble())
+                }
                 ReverieCoreBridge.setBrushAngle(angle.toDouble())
                 ReverieCoreBridge.setBrushScatter(scatter.toDouble())
                 ReverieCoreBridge.setBrushRotation(rotation.toDouble())
@@ -627,6 +643,10 @@ private fun PaintViewModel.dispatchLayerOpLocked(
 
         L_CLIPPED -> {
             ReverieCoreBridge.setLayerClipped(i, arg == "1")
+        }
+
+        L_ALPHA_INHERITED -> {
+            ReverieCoreBridge.setLayerAlphaInherited(i, arg == "1")
         }
 
         L_RENAME -> {
@@ -770,6 +790,13 @@ private fun PaintViewModel.dispatchToolOpLocked(
     r: RecordingReader,
 ) {
     when (op) {
+        com.reverie.paint.model.RecordingEvents.T_PATTERN_FILL -> {
+            val event = com.reverie.paint.model.PatternFillEvent.readFrom(r, replaySession?.lastPatternPng)
+            replaySession?.lastPatternPng = event.png
+            if (!applyPatternFillLocked(event)) {
+                android.util.Log.w("ReverieReplay", "Pattern fill skipped: target is not editable")
+            }
+        }
         T_SHAPE -> {
             val kind = r.u8()
             val x1 = r.f32()
@@ -837,15 +864,17 @@ private fun PaintViewModel.dispatchToolOpLocked(
             // The replay rebuilt the native undo stack stroke-by-stroke in the
             // same order as the live session, so a plain native undo pops the
             // exact transaction the user undid while recording.
-            ReverieCoreBridge.undo()
-            val nw = ReverieCoreBridge.docWidth()
-            val nh = ReverieCoreBridge.docHeight()
-            if (nw > 0 && nh > 0 && (nw != coreW || nh != coreH)) {
-                coreW = nw
-                coreH = nh
-                renderW = -1
-                renderH = -1
-                setRenderViewport(coreW, coreH)
+            if (ReverieCoreBridge.canUndo()) {
+                ReverieCoreBridge.undo()
+                val nw = ReverieCoreBridge.docWidth()
+                val nh = ReverieCoreBridge.docHeight()
+                if (nw > 0 && nh > 0 && (nw != coreW || nh != coreH)) {
+                    coreW = nw
+                    coreH = nh
+                    renderW = -1
+                    renderH = -1
+                    setRenderViewport(coreW, coreH)
+                }
             }
         }
 
@@ -853,15 +882,17 @@ private fun PaintViewModel.dispatchToolOpLocked(
         T_CANVAS_CUT -> ReverieCoreBridge.copyCanvasToClipboard(true)
         T_CANVAS_PASTE -> ReverieCoreBridge.pasteCanvasClipboard()
         T_REDO -> {
-            ReverieCoreBridge.redo()
-            val nw = ReverieCoreBridge.docWidth()
-            val nh = ReverieCoreBridge.docHeight()
-            if (nw > 0 && nh > 0 && (nw != coreW || nh != coreH)) {
-                coreW = nw
-                coreH = nh
-                renderW = -1
-                renderH = -1
-                setRenderViewport(coreW, coreH)
+            if (ReverieCoreBridge.canRedo()) {
+                ReverieCoreBridge.redo()
+                val nw = ReverieCoreBridge.docWidth()
+                val nh = ReverieCoreBridge.docHeight()
+                if (nw > 0 && nh > 0 && (nw != coreW || nh != coreH)) {
+                    coreW = nw
+                    coreH = nh
+                    renderW = -1
+                    renderH = -1
+                    setRenderViewport(coreW, coreH)
+                }
             }
         }
 

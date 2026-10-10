@@ -164,6 +164,7 @@ class PaintViewModel : ViewModel() {
     }
 
     internal fun checkAutoSave() {
+        if (isQuickShapeEditing) return
         if (!autoSaveEnabled || isAutoSaving || isBlockingLoading) return
         if (currentPage != Page.PAINTING) return
         if (!hasUnsavedChanges()) return
@@ -199,6 +200,7 @@ class PaintViewModel : ViewModel() {
     }
 
     fun onAppBackgrounded() {
+        cancelQuickShape() // Restore the freehand draft before background backup is queued
         // 后台不再每秒唤醒: 计时与自动保存都只在绘画页前台有意义。
         // 必须放在下面几个早退之前 —— 否则"无未保存改动"时计时器会一直留在后台跑。
         stopPaintingTimer()
@@ -238,6 +240,7 @@ class PaintViewModel : ViewModel() {
     // Auto-Save & General Settings state
     var autoSaveEnabled by mutableStateOf(true)
     var autoSaveIntervalMinutes by mutableIntStateOf(5)
+    var autoSaveMaxSnapshots by mutableIntStateOf(com.reverie.paint.model.AutoSaveSnapshotPolicy.DEFAULT_MAX_SNAPSHOTS)
     var autoSaveToastEnabled by mutableStateOf(true)
     var strokesSinceLastAutoSave by mutableIntStateOf(0)
     var hasPendingMajorOp by mutableStateOf(false)
@@ -592,6 +595,7 @@ class PaintViewModel : ViewModel() {
     var brushTextureScale by mutableDoubleStateOf(1.0)
     var brushTextureStrength by mutableDoubleStateOf(0.5)
     var brushTextureMode by mutableStateOf("multiply")
+    var brushTexturePattern by mutableStateOf("")
     var brushHueJitter by mutableDoubleStateOf(0.0)
     var brushSatJitter by mutableDoubleStateOf(0.0)
     var brushValJitter by mutableDoubleStateOf(0.0)
@@ -620,6 +624,8 @@ class PaintViewModel : ViewModel() {
         }
     }
 
+    internal var brushStudioInitialKppBytes: ByteArray? = null
+
     fun updateBrushDynamicOption(config: com.reverie.paint.model.DynamicOptionConfig) {
         updateBrushDynamicOption(config.optionKey, config)
     }
@@ -638,6 +644,7 @@ class PaintViewModel : ViewModel() {
                 strength = config.strength.toDouble(),
             )
         }
+        saveBrushParam(dynamicsChanged = true)
     }
 
     val effectiveBrushMaxSize: Double
@@ -662,6 +669,8 @@ class PaintViewModel : ViewModel() {
     var brushAirbrushRate by mutableDoubleStateOf(30.0)
     var brushSmudgeRate by mutableDoubleStateOf(0.5)
     var brushSmudgeLength by mutableDoubleStateOf(0.5)
+    var brushColorRate by mutableDoubleStateOf(0.5)
+    var brushSmudgeMode by mutableIntStateOf(0) // 0: Dulling, 1: Smearing
     var brushSpikes by mutableIntStateOf(2)
     var brushJitterAngle by mutableDoubleStateOf(0.0)
     var brushJitterSize by mutableDoubleStateOf(0.0)
@@ -705,6 +714,7 @@ class PaintViewModel : ViewModel() {
     var layerPanelOpen by mutableStateOf(false)
     var brushPanelOpen by mutableStateOf(false)
     var brushStudioOpen by mutableStateOf(false)
+    var brushStudioInitialParams by mutableStateOf<BrushParams?>(null)
 
     // Brush panel persistence state
     var brushPanelSelectedCategory by mutableStateOf("全部")
@@ -813,6 +823,27 @@ class PaintViewModel : ViewModel() {
     var currentToolId by mutableStateOf("brush")
         internal set
 
+    /** 当前笔画临时覆盖工具 (如物理橡皮擦末端 TOOL_TYPE_ERASER 或侧键临时擦除生效时设为 "eraser") */
+    var activeStrokeToolOverride by mutableStateOf<String?>(null)
+        internal set
+    internal var activeStrokeOriginalPresetIndex: Int = -1
+    internal var activeStrokeOriginalSize: Double = 0.0
+    internal var activeStrokeOriginalOpacity: Double = 1.0
+    internal var activeStrokeOriginalFlow: Double = 1.0
+    internal var activeStrokeOriginalCompositeOp: String = "normal"
+    internal var activeStrokeOriginalToolMode: Int = 0
+
+    /**
+     * 获取指定工具 (如 "eraser") 的当前有效笔尖尺寸
+     */
+    fun getToolEffectiveSize(toolId: String): Double {
+        val state = toolBrushStates[toolId]
+        val curPreset = brushPresets.firstOrNull { it.index == state?.presetIndex }
+        val saved = curPreset?.let { brushParams[it.name] }
+        val mem = curPreset?.let { state?.paramMemory?.get(it.name) }
+        return mem?.getOrNull(0) ?: saved?.size ?: brushSize
+    }
+
     /** 最近一次活跃的绘制类工具 (brush / eraser / smudge), 用于在临时工具 (如吸管) 切换回笔刷时保留笔刷尺寸与参数 */
     var lastDrawingToolId: String = "brush"
         internal set
@@ -845,33 +876,35 @@ class PaintViewModel : ViewModel() {
     var referenceWindowWidth by mutableFloatStateOf(260f)
     var referenceWindowHeight by mutableFloatStateOf(300f)
 
-    fun persistReferenceState() {
-        if (!::appContext.isInitialized) return
-        try {
-            val p = appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE).edit()
-            p.putBoolean("ref_window_open", referenceWindowOpen)
-            p.putFloat("ref_window_x", referenceWindowX)
-            p.putFloat("ref_window_y", referenceWindowY)
-            p.putFloat("ref_window_w", referenceWindowWidth)
-            p.putFloat("ref_window_h", referenceWindowHeight)
-            p.putBoolean("ref_is_grayscale", referenceIsGrayscale)
-            p.putBoolean("ref_allow_rotation", referenceAllowRotation)
-            p.putBoolean("ref_is_flipped", referenceIsFlipped)
-            p.putInt("ref_active_tab", referenceActiveTab)
-            p.putBoolean("ref_bars_collapsed", referenceBarsCollapsed)
-            p.putFloat("ref_zoom", referenceZoom)
-            p.putFloat("ref_rotation", referenceRotation)
-            p.putFloat("ref_pan_x", referencePanX)
-            p.putFloat("ref_pan_y", referencePanY)
-            p.apply()
-        } catch (_: Exception) {}
-    }
+    @Volatile internal var referenceSession: Long = 0
+    @Volatile internal var referenceOperation: Long = 0
+    internal var referenceImportJob: Job? = null
+    internal var referenceRestoreJob: Job? = null
+    internal var referenceImportActive = false
+    internal var referenceLoading = false
+    var referenceBitmapLoading by mutableStateOf(false)
+        internal set
+    internal var referenceDeferredFiles: List<java.io.File>? = null
+    internal var referenceSavedState = com.reverie.paint.model.ReferenceViewState()
+    @Volatile internal var referenceProfileId = java.util.UUID.randomUUID().toString()
+    internal val referenceStore by lazy { LocalReferenceStore(appContext) }
+    internal val referenceIoMutex = kotlinx.coroutines.sync.Mutex()
+    var referenceCacheBytes by mutableLongStateOf(0L)
+        internal set
+    var referenceCacheClearing by mutableStateOf(false)
+        internal set
+    var hasLegacyReferenceImages by mutableStateOf(false)
+        internal set
+
+    fun persistReferenceState() = persistProjectReferenceState()
 
     // Quick Actions Tool Window State (快捷操作浮窗)
     var quickActionWindowOpen by mutableStateOf(false)
     var quickActionsConfig by mutableStateOf(com.reverie.paint.model.QuickActionsConfig())
     var quickActionWindowX by mutableFloatStateOf(-1f)
     var quickActionWindowY by mutableFloatStateOf(-1f)
+    var quickActionWindowWidth by mutableFloatStateOf(0f)
+    var quickActionWindowHeight by mutableFloatStateOf(0f)
     var quickActionCollapsed by mutableStateOf(false)
 
     fun persistQuickActionsState() {
@@ -894,6 +927,8 @@ class PaintViewModel : ViewModel() {
     var quickBrushWindowOpen by mutableStateOf(false)
     var quickBrushWindowX by mutableFloatStateOf(-1f)
     var quickBrushWindowY by mutableFloatStateOf(-1f)
+    var quickBrushWindowWidth by mutableFloatStateOf(0f)
+    var quickBrushWindowHeight by mutableFloatStateOf(0f)
     var quickBrushCollapsed by mutableStateOf(false)
     var quickBrushOrientation by mutableStateOf("horizontal") // "horizontal" or "vertical"
     var quickBrushMaxLength by mutableIntStateOf(6) // 最大长度（显示数量上限）
@@ -912,6 +947,80 @@ class PaintViewModel : ViewModel() {
             p.putString("quick_brush_order", quickBrushOrder.joinToString(","))
             p.apply()
         } catch (_: Exception) {}
+    }
+
+    // Pointer Screen Position Tracking (for opening floating panels at pointer)
+    var lastPointerScreenPosition by mutableStateOf<androidx.compose.ui.geometry.Offset?>(null)
+
+    // Quick Color Tool Window State (快捷颜色浮窗)
+    var quickColorWindowOpen by mutableStateOf(false)
+    var quickColorWindowX by mutableFloatStateOf(-1f)
+    var quickColorWindowY by mutableFloatStateOf(-1f)
+    var quickColorWindowWidth by mutableFloatStateOf(0f)
+    var quickColorWindowHeight by mutableFloatStateOf(0f)
+    var quickColorCollapsed by mutableStateOf(false)
+    var quickColorTab by mutableIntStateOf(0)
+
+    fun persistQuickColorState() {
+        if (!::appContext.isInitialized) return
+        try {
+            val p = appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE).edit()
+            p.putBoolean("quick_color_open", quickColorWindowOpen)
+            p.putFloat("quick_color_x", quickColorWindowX)
+            p.putFloat("quick_color_y", quickColorWindowY)
+            p.putBoolean("quick_color_collapsed", quickColorCollapsed)
+            p.putInt("quick_color_tab", quickColorTab)
+            p.apply()
+        } catch (_: Exception) {}
+    }
+
+    fun toggleQuickColor(atPointer: Boolean = false) {
+        if (quickColorWindowOpen) {
+            quickColorWindowOpen = false
+        } else {
+            if (atPointer) {
+                lastPointerScreenPosition?.let { pos ->
+                    quickColorWindowX = (pos.x - 110f).coerceAtLeast(0f)
+                    quickColorWindowY = (pos.y - 120f).coerceAtLeast(0f)
+                }
+            }
+            quickColorWindowOpen = true
+        }
+        persistQuickColorState()
+    }
+
+    fun swapColors() {
+        val c1 = brushColor
+        val c2 = brushSecondaryColor
+        updateBrushColor(c2)
+        updateBrushSecondaryColor(c1)
+    }
+
+    // Quick Layer Tool Window State (快捷图层浮窗)
+    var quickLayerWindowOpen by mutableStateOf(false)
+    var quickLayerWindowX by mutableFloatStateOf(-1f)
+    var quickLayerWindowY by mutableFloatStateOf(-1f)
+    var quickLayerWindowWidth by mutableFloatStateOf(0f)
+    var quickLayerWindowHeight by mutableFloatStateOf(0f)
+    var quickLayerCollapsed by mutableStateOf(false)
+    var quickLayerPinned by mutableStateOf(true)
+
+    fun persistQuickLayerState() {
+        if (!::appContext.isInitialized) return
+        try {
+            val p = appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE).edit()
+            p.putBoolean("quick_layer_open", quickLayerWindowOpen)
+            p.putFloat("quick_layer_x", quickLayerWindowX)
+            p.putFloat("quick_layer_y", quickLayerWindowY)
+            p.putBoolean("quick_layer_collapsed", quickLayerCollapsed)
+            p.putBoolean("quick_layer_pinned", quickLayerPinned)
+            p.apply()
+        } catch (_: Exception) {}
+    }
+
+    fun toggleQuickLayer() {
+        quickLayerWindowOpen = !quickLayerWindowOpen
+        persistQuickLayerState()
     }
 
     fun getOrderedFavoriteBrushes(): List<BrushPresetInfo> {
@@ -960,10 +1069,7 @@ class PaintViewModel : ViewModel() {
                 applyTool("picker")
             }
             com.reverie.paint.model.QuickAction.SWAP_COLOR -> {
-                val c1 = brushColor
-                val c2 = brushSecondaryColor
-                updateBrushColor(c2)
-                updateBrushSecondaryColor(c1)
+                swapColors()
             }
             com.reverie.paint.model.QuickAction.BRUSH_SIZE_INC -> {
                 val newSize = (brushSize * 1.25).coerceAtMost(effectiveBrushMaxSize)
@@ -997,6 +1103,12 @@ class PaintViewModel : ViewModel() {
             com.reverie.paint.model.QuickAction.DISABLE_TOUCH -> {
                 isCanvasTouchDisabled = !isCanvasTouchDisabled
             }
+            com.reverie.paint.model.QuickAction.TOGGLE_QUICK_COLOR -> {
+                toggleQuickColor(atPointer = true)
+            }
+            com.reverie.paint.model.QuickAction.TOGGLE_QUICK_LAYER -> {
+                toggleQuickLayer()
+            }
         }
     }
 
@@ -1023,107 +1135,6 @@ class PaintViewModel : ViewModel() {
     fun syncAuthorProfileToCore() {
         runCore(render = false) {
             ReverieCoreBridge.setAuthorProfile(authorProfile.toJson())
-        }
-    }
-
-    fun persistReferenceImages() {
-        if (!::appContext.isInitialized) return
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val dir = java.io.File(appContext.filesDir, "ref_images")
-                if (dir.exists()) dir.deleteRecursively()
-                dir.mkdirs()
-                val currentImgs = referenceImages
-                for ((idx, bmp) in currentImgs.withIndex()) {
-                    val file = java.io.File(dir, "ref_$idx.png")
-                    java.io.FileOutputStream(file).use { out ->
-                        bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
-                    }
-                }
-                val urisJson = JSONArray().apply {
-                    for (u in referenceAlbumSelectedUris) {
-                        put(u.toString())
-                    }
-                }.toString()
-                appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
-                    .edit()
-                    .putInt("ref_images_count", currentImgs.size)
-                    .putString("ref_album_selected_uris", urisJson)
-                    .apply()
-            } catch (e: Exception) {
-                android.util.Log.e("ReveriePaint", "Failed to persist reference images", e)
-            }
-        }
-    }
-
-    fun loadPersistedReferenceImages() {
-        if (!::appContext.isInitialized) return
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val prefs = appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
-                val urisJson = prefs.getString("ref_album_selected_uris", null)
-                val restoredUris = mutableListOf<android.net.Uri>()
-                if (!urisJson.isNullOrEmpty()) {
-                    try {
-                        val arr = JSONArray(urisJson)
-                        for (i in 0 until arr.length()) {
-                            restoredUris.add(android.net.Uri.parse(arr.getString(i)))
-                        }
-                    } catch (_: Throwable) {}
-                }
-
-                val dir = java.io.File(appContext.filesDir, "ref_images")
-                val count = prefs.getInt("ref_images_count", 0)
-                val list = mutableListOf<Bitmap>()
-                // B4: 参考图恢复改**有界解码** —— 最长边压到 2048, 并设总字节预算。
-                // 参考图只是"看着画"的辅助, 不需要原始分辨率; 而 decodeFile 按整张图分配,
-                // 老版本存下来的大图会让启动时一次性分配几百 MB(甚至 OOM)。
-                val maxEdge = 2048
-                val totalBudget = 64L * 1024L * 1024L
-                var loadedBytes = 0L
-                val decodeScaled: (java.io.File) -> Bitmap? = { f ->
-                    try {
-                        val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                        android.graphics.BitmapFactory.decodeFile(f.absolutePath, bounds)
-                        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
-                            null
-                        } else {
-                            var sample = 1
-                            while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= maxEdge) sample *= 2
-                            android.graphics.BitmapFactory.decodeFile(
-                                f.absolutePath,
-                                android.graphics.BitmapFactory.Options().apply { inSampleSize = sample },
-                            )
-                        }
-                    } catch (_: Throwable) {
-                        null
-                    }
-                }
-                if (dir.exists() && count > 0) {
-                    for (i in 0 until count) {
-                        val file = java.io.File(dir, "ref_$i.png")
-                        if (!file.exists()) continue
-                        val bmp = decodeScaled(file) ?: continue
-                        if (loadedBytes + bmp.byteCount > totalBudget) {
-                            // 预算用尽: 后面的图直接跳过(宁可少几张, 也不把内存打满)
-                            bmp.recycle()
-                            break
-                        }
-                        loadedBytes += bmp.byteCount
-                        list.add(bmp)
-                    }
-                }
-                viewModelScope.launch(Dispatchers.Main) {
-                    if (restoredUris.isNotEmpty()) {
-                        referenceAlbumSelectedUris = restoredUris
-                    }
-                    if (list.isNotEmpty()) {
-                        referenceImages = list
-                    }
-                }
-            } catch (e: Exception) {
-                android.util.Log.e("ReveriePaint", "Failed to load reference images", e)
-            }
         }
     }
 
@@ -1205,112 +1216,17 @@ class PaintViewModel : ViewModel() {
         }.getOrNull()
     }
 
-    suspend fun loadBitmapsFromUris(uris: List<android.net.Uri>): List<Bitmap> = withContext(Dispatchers.IO) {
-        val loaded = mutableListOf<Bitmap>()
-        val maxDim = 2048
-        for (uri in uris.take(MAX_REFERENCE_IMAGES)) {
-            try {
-                val bmp = if (uri.scheme == "http" || uri.scheme == "https") {
-                    val conn = java.net.URL(uri.toString()).openConnection()
-                    conn.connectTimeout = 10000
-                    conn.readTimeout = 15000
-                    conn.getInputStream()?.use { s ->
-                        android.graphics.BitmapFactory.decodeStream(s)
-                    }
-                } else {
-                    decodeSampledBitmapFromUri(uri, maxDim)
-                }
-                if (bmp != null) {
-                    loaded.add(bmp)
-                }
-            } catch (e: Exception) {
-                android.util.Log.e("ReveriePaint", "Failed to load reference image $uri", e)
-            }
-        }
-        loaded
-    }
+    fun applyReferenceAlbumSelection(selectedUris: List<android.net.Uri>) =
+        importProjectReferences(selectedUris, replace = true)
 
-    fun applyReferenceAlbumSelection(selectedUris: List<android.net.Uri>) {
-        val trimmed = selectedUris.distinct().take(MAX_REFERENCE_IMAGES)
-        referenceAlbumSelectedUris = trimmed
-        if (trimmed.isEmpty()) {
-            clearReferenceImage()
-            return
-        }
-        viewModelScope.launch(Dispatchers.IO) {
-            val loaded = loadBitmapsFromUris(trimmed)
-            viewModelScope.launch(Dispatchers.Main) {
-                val wasEmpty = referenceImages.isEmpty()
-                referenceImages = loaded
-                referenceActiveTab = 0
-                referenceWindowOpen = true
-                if (wasEmpty) {
-                    resetReferenceTransform()
-                }
-                persistReferenceImages()
-                persistReferenceState()
-            }
-        }
-    }
-
-    fun importReferenceImagesFromUris(uris: List<android.net.Uri>) {
-        if (!::appContext.isInitialized || uris.isEmpty()) return
-        if (isImportingMedia) {
-            showActionToast(R.string.toast_importing_media, R.drawable.ic_image)
-            return
-        }
-        isImportingMedia = true
-        viewModelScope.launch(Dispatchers.IO) {
-            val newBitmaps = mutableListOf<Bitmap>()
-            val maxAllowed = MAX_REFERENCE_IMAGES
-            val maxDim = 2048
-            for (uri in uris.take(maxAllowed)) {
-                try {
-                    val bmp = if (uri.scheme == "http" || uri.scheme == "https") {
-                        val conn = java.net.URL(uri.toString()).openConnection()
-                        conn.connectTimeout = 10000
-                        conn.readTimeout = 15000
-                        conn.getInputStream()?.use { s ->
-                            android.graphics.BitmapFactory.decodeStream(s)
-                        }
-                    } else {
-                        decodeSampledBitmapFromUri(uri, maxDim)
-                    }
-                    if (bmp != null) {
-                        newBitmaps.add(bmp)
-                    }
-                } catch (e: Exception) {
-                    android.util.Log.e("ReveriePaint", "Failed to load reference image $uri", e)
-                }
-            }
-            viewModelScope.launch(Dispatchers.Main) {
-                isImportingMedia = false
-                if (newBitmaps.isNotEmpty()) {
-                    val combined = referenceImages + newBitmaps
-                    referenceImages = combined.takeLast(maxAllowed)
-                    referenceAlbumSelectedUris = (referenceAlbumSelectedUris + uris).distinct().take(maxAllowed)
-                    referenceActiveTab = 0
-                    referenceWindowOpen = true
-                    resetReferenceTransform()
-                    persistReferenceImages()
-                    persistReferenceState()
-                    showActionToast(R.string.toast_imported_ref_images, R.drawable.ic_image, newBitmaps.size)
-                }
-            }
-        }
-    }
+    fun importReferenceImagesFromUris(uris: List<android.net.Uri>) =
+        importProjectReferences(uris, replace = false)
 
     fun importReferenceImageFromUri(uri: android.net.Uri) {
         importReferenceImagesFromUris(listOf(uri))
     }
 
-    fun clearReferenceImage() {
-        referenceImages = emptyList()
-        referenceAlbumSelectedUris = emptyList()
-        resetReferenceTransform()
-        persistReferenceImages()
-        persistReferenceState()
-    }
+    fun clearReferenceImage() = clearProjectReferences()
 
     fun resetReferenceTransform() {
         referenceZoom = 1f
@@ -1329,6 +1245,7 @@ class PaintViewModel : ViewModel() {
     var themeMode by mutableStateOf("DARK") // "DARK", "LIGHT", "SYSTEM"
     var paintingUiScale by mutableFloatStateOf(1.0f) // 绘画页面整体 UI 大小缩放 (0.75 - 1.35)
     var layerRowHeightDp by mutableIntStateOf(52) // 44: 紧凑, 52: 标准, 64: 舒适
+    var layerHeaderInheritAlpha by mutableStateOf(false) // 图层面板顶部按钮行为: false 为剪切蒙版, true 为继承透明度
     var quickSliderHeightDp by mutableIntStateOf(175) // 绘画界面快捷滑块长度 (100 - 260 dp, 默认 175)
     var leftHandMode by mutableStateOf(false) // 左手模式: 快捷工具栏与滑块镜像停靠在右侧
     var selectionMaskColorHex by mutableStateOf("#141416") // 选区蒙版遮罩颜色 (默认深空灰黑)
@@ -1338,6 +1255,8 @@ class PaintViewModel : ViewModel() {
     var railSliderPanelHeightPx by mutableFloatStateOf(0f)
     var showToolbarSqueezedDialog by mutableStateOf(false)
     var toolbarSqueezedWarningDismissed by mutableStateOf(false)
+    var showLowStorageDialog by mutableStateOf(false)
+    var lowStorageMessage by mutableStateOf("")
 
     fun dismissToolbarSqueezedWarning(forever: Boolean) {
         showToolbarSqueezedDialog = false
@@ -1455,7 +1374,20 @@ class PaintViewModel : ViewModel() {
     var brushCursorMode by mutableIntStateOf(3) // 0: 不显示, 1: 绘画时显示, 2: 悬空显示, 3: 绘画和悬空显示
     var eraserCursorMode by mutableIntStateOf(3)
     var cursorStyleMode by mutableIntStateOf(5) // 0: 圆形, 1: 十字准星, 2: 点, 3: 无, 4: 系统指针, 5: 圆+十字准星
-    var quickShapeEnabled by mutableStateOf(false) // 驻停线条成形 (已禁用)
+    var quickShapeEnabled by mutableStateOf(false) // 驻停线条成形，默认关闭
+    var quickShapeQuadrilateralEnabled by mutableStateOf(false)
+    var quickShapeConversionsEnabled by mutableStateOf(false)
+    var quickShapeCurveEnabled by mutableStateOf(false)
+    var quickShapeRelaxedEnabled by mutableStateOf(false)
+    var quickShapeArcEnabled by mutableStateOf(false)
+    var quickShapeBoxHandlesEnabled by mutableStateOf(false)
+    var quickShapeCurvedContourEnabled by mutableStateOf(false)
+    var quickShapeContourEnabled by mutableStateOf(false)
+    var quickShapeAngleSnapEnabled by mutableStateOf(false)
+    var quickShapePerPointPressureEnabled by mutableStateOf(false)
+    internal var quickShapeCapture: QuickShapeStrokeCapture? = null
+    internal var quickShapeDraft: QuickShapeDraft? = null
+    var quickShapeCommitting by mutableStateOf(false)
     var activeQuickShape by mutableStateOf<QuickShapeResult?>(null)
     var isQuickShapeEditing by mutableStateOf(false)
 
@@ -1478,6 +1410,24 @@ class PaintViewModel : ViewModel() {
     var stylusAudioVolume by mutableFloatStateOf(0.6f)
     var stylusAudioType by mutableStateOf(StylusAudioType.PENCIL)
     var stylusStrokePredictionEnabled by mutableStateOf(true)
+    /**
+     * 前缓冲预测 (本次低延迟技术的总开关, 默认关)。
+     * 开启时启用: 卡尔曼运动预测 + 墨迹空窗回填 + 前缓冲直出 + 光标跟随 + 悬停前瞻;
+     * 关闭时回到上游原版行为 (仅"超低延迟笔迹预测"开关的 OEM 硬件尾线)。
+     */
+    var frontBufferPredictionEnabled by mutableStateOf(false)
+
+    /**
+     * 笔迹预测总开关: 任一预测开启即视为开启
+     */
+    val stylusPredictionMasterEnabled: Boolean
+        get() = stylusStrokePredictionEnabled || frontBufferPredictionEnabled
+
+    /**
+     * 笔迹预测算法模式: "HARDWARE" (硬件SDK算法) 或 "SOFTWARE" (APP软件算法)
+     */
+    val stylusPredictionAlgorithmType: String
+        get() = if (frontBufferPredictionEnabled) "SOFTWARE" else "HARDWARE"
     // Samsung Notes 标准语义: 按住侧键落笔 = 临时橡皮 (默认开, 可在三星 S Pen 专属设置中关闭)
     var samsungSideButtonErase by mutableStateOf(true)
     var samsungSingleClickAction by mutableStateOf("toggle_eraser")
@@ -1485,17 +1435,19 @@ class PaintViewModel : ViewModel() {
     var samsungLongPressAction by mutableStateOf("tool_picker")
 
     // HUAWEI M-Pencil 适配参数
-    var huaweiPencilModelMode by mutableStateOf("AUTO") // "AUTO", "GEN3_NEARLINK", "GEN2", "GEN1"
+    var huaweiPencilModelMode by mutableStateOf("AUTO") // "AUTO", "PRO", "GEN3_NEARLINK", "GEN2", "GEN1"
     val detectedHuaweiPencilModel: com.reverie.paint.core.stylus.HuaweiPencilModel
         get() = stylusDriver?.detectHuaweiPencilModel() ?: com.reverie.paint.core.stylus.HuaweiPencilModel.GEN2
     val huaweiPencilModel: com.reverie.paint.core.stylus.HuaweiPencilModel
         get() = when (huaweiPencilModelMode) {
+            "PRO" -> com.reverie.paint.core.stylus.HuaweiPencilModel.PRO
             "GEN3_NEARLINK" -> com.reverie.paint.core.stylus.HuaweiPencilModel.GEN3_NEARLINK
             "GEN2" -> com.reverie.paint.core.stylus.HuaweiPencilModel.GEN2
             "GEN1" -> com.reverie.paint.core.stylus.HuaweiPencilModel.GEN1
             else -> detectedHuaweiPencilModel
         }
     var huaweiDoubleTapAction by mutableStateOf("toggle_eraser")
+    var huaweiSqueezeAction by mutableStateOf("tool_color")
     var huaweiSingleClickAction by mutableStateOf("none")
     var huaweiLongPressAction by mutableStateOf("tool_color")
     var huaweiSideButtonErase by mutableStateOf(true)
@@ -1539,7 +1491,27 @@ class PaintViewModel : ViewModel() {
     var xiaomiSlideSensitivity by mutableStateOf("normal")
     var xiaomiInPenHapticsEnabled by mutableStateOf(true)
 
+    // vivo / iQOO 手写笔适配参数 (笔迹预测开关复用全局 stylusStrokePredictionEnabled)
+    var vivoPencilModelMode by mutableStateOf("AUTO") // "AUTO", "VIVO_PENCIL2", "VIVO_PENCIL2_NV", "VIVO_PENCIL2S", "VIVO_PENCIL3", "VIVO_PENCIL1"
+    val detectedVivoPencilModel: com.reverie.paint.core.stylus.VivoPencilModel
+        get() = stylusDriver?.detectVivoPencilModel() ?: com.reverie.paint.core.stylus.VivoPencilModel.VIVO_PENCIL2
+    val vivoPencilModel: com.reverie.paint.core.stylus.VivoPencilModel
+        get() = when (vivoPencilModelMode) {
+            "VIVO_PENCIL2" -> com.reverie.paint.core.stylus.VivoPencilModel.VIVO_PENCIL2
+            "VIVO_PENCIL2_NV" -> com.reverie.paint.core.stylus.VivoPencilModel.VIVO_PENCIL2_NV
+            "VIVO_PENCIL2S" -> com.reverie.paint.core.stylus.VivoPencilModel.VIVO_PENCIL2S
+            "VIVO_PENCIL3" -> com.reverie.paint.core.stylus.VivoPencilModel.VIVO_PENCIL3
+            "VIVO_PENCIL1" -> com.reverie.paint.core.stylus.VivoPencilModel.VIVO_PENCIL1
+            else -> detectedVivoPencilModel
+        }
+    var vivoDoubleTapAction by mutableStateOf("toggle_eraser")
+    var vivoPrimaryClickAction by mutableStateOf("toggle_eraser")
+    var vivoSecondaryClickAction by mutableStateOf("tool_picker")
+    var vivoSideButtonErase by mutableStateOf(true)
+    var vivoWritingVibrateEnabled by mutableStateOf(true)
+
     // 通用 (Generic) 手写笔适配参数
+    var genericStylusEnabled by mutableStateOf(false)
     var genericPrimaryButtonAction by mutableStateOf("toggle_eraser")
     var genericSecondaryButtonAction by mutableStateOf("undo")
     var genericSideButtonErase by mutableStateOf(true)
@@ -1548,11 +1520,116 @@ class PaintViewModel : ViewModel() {
     var motionPredictorEnabled by mutableStateOf(true)
 
     /**
-     * 判定当前笔刷是否适用于前向矢量切线预测。
-     * 画世界 Pro / Procreate 规范：
-     * 仅对纯色、实心、无纹理的线稿类基础笔刷启用切线预测；
-     * 自动排除带颗粒纹理、杂色抖动、低透明度罩染、大间距打点、复杂水彩/涂抹/笔刷印章的笔刷，
-     * 避免在有质感的笔迹前方拉出生硬突兀的矢量直线。
+     * 笔刷低延迟前向预测保真度分级 (Fidelity Tiering)
+     * 严格依据 docs/WET-INK-EXPERIMENT.md 历史教训，避免图像笔尖替换跳变与粗劣生硬假线：
+     * - NONE: 严禁放行 (印章/喷溅/特效/网格/形状/色彩混合等，保持纯裸管线)
+     * - TIER_1: 高保真基础 (勾线/圆笔/墨水/平头/标准线稿，透明度对齐真墨全量放行)
+     * - TIER_2: 精细拟合 (铅笔/速写/低流量及未知笔刷，发丝级导引线)
+     * - STAMP: 真实笔尖戳印 (水彩/纹理与排线/绘画类)：前缓冲逐 dab 盖印真实 tip
+     *   位图 (形状颜色与真墨一致，仅湿润累积为近似，预览只存活 1~2 帧)。
+     *   仅 brush 工具；tip 不可解码时渲染侧回落 TIER_2 发丝线。
+     */
+    enum class PredictionFidelityTier {
+        NONE,
+        TIER_1,
+        TIER_2,
+        STAMP
+    }
+
+    private var cachedPredictionTier: PredictionFidelityTier? = null
+    private var cachedTierBrushPresetIndex: Int = -1
+    private var cachedTierToolId: String = ""
+    private var cachedTierPredictionEnabled: Boolean = true
+    private var cachedTierTextureEnabled: Boolean = false
+    private var cachedTierOpacity: Double = -1.0
+    private var cachedTierFlow: Double = -1.0
+    private var cachedTierCompositeOp: String = ""
+
+    /**
+     * 判定当前笔刷的保真度分级 (带 O(1) 状态缓存，防热路径每帧线性扫描)。
+     * 遵循 docs/WET-INK-EXPERIMENT.md 历史教训，杜绝图像笔尖替换跳变与软硬边突变：
+     * - NONE: 印章/喷溅/特效/网格/双重蒙版/涂抹，以及严重低透明度或极端散布；
+     * - TIER_2: 铅笔/速写，或启用材质纹理、喷枪/软笔尖、中低流量笔刷（仅绘制微细笔锋导引，防 Overdraw 加深）；
+     * - TIER_1: 基础线稿/勾线/纯色墨水/圆笔/平头 (高保真全量放行，支持完整空窗回填)。
+     * - STAMP: 水彩/纹理与排线/绘画类 (真实笔尖戳印，形状颜色与真墨一致)。
+     */
+    val currentBrushPredictionTier: PredictionFidelityTier
+        get() {
+            if (!frontBufferPredictionEnabled) return PredictionFidelityTier.NONE
+            if (currentToolId != "brush" && currentToolId != "eraser") return PredictionFidelityTier.NONE
+            if (currentToolId == "smudge") return PredictionFidelityTier.NONE
+
+            if (cachedPredictionTier != null &&
+                cachedTierBrushPresetIndex == brushPresetIndex &&
+                cachedTierToolId == currentToolId &&
+                cachedTierPredictionEnabled == frontBufferPredictionEnabled &&
+                cachedTierTextureEnabled == brushTextureEnabled &&
+                cachedTierOpacity == brushOpacity &&
+                cachedTierFlow == brushFlow &&
+                cachedTierCompositeOp == brushCompositeOp
+            ) {
+                return cachedPredictionTier!!
+            }
+
+            val tier = computeCurrentBrushPredictionTier()
+            cachedPredictionTier = tier
+            cachedTierBrushPresetIndex = brushPresetIndex
+            cachedTierToolId = currentToolId
+            cachedTierPredictionEnabled = frontBufferPredictionEnabled
+            cachedTierTextureEnabled = brushTextureEnabled
+            cachedTierOpacity = brushOpacity
+            cachedTierFlow = brushFlow
+            cachedTierCompositeOp = brushCompositeOp
+            return tier
+        }
+
+    private fun computeCurrentBrushPredictionTier(): PredictionFidelityTier {
+        val preset = brushPresets.firstOrNull { it.index == brushPresetIndex }
+        return resolvePredictionTier(
+            predictionEnabled = frontBufferPredictionEnabled,
+            toolId = currentToolId,
+            compositeOp = brushCompositeOp,
+            scatter = brushScatter,
+            spacing = brushSpacing,
+            opacity = brushOpacity,
+            flow = brushFlow,
+            textureEnabled = brushTextureEnabled,
+            presetGroup = preset?.group,
+            presetName = preset?.name ?: ""
+        )
+    }
+
+    /**
+     * 加权平滑 / 拉绳防抖是否生效。读内存字段, 无 IO, 热路径可直接读。
+     * (与 PaintViewModelTools.touchEnd 的 needCatchUp 判定同源)
+     */
+    val isStrokeSmoothingActive: Boolean
+        get() = when (strokeSmoothingType) {
+            SMOOTHING_OFF -> false
+            SMOOTHING_WEIGHTED -> (strokeSmoothnessDistanceMin > 0.0 || strokeSmoothnessDistanceMax > 0.0)
+            else -> maxOf(strokeStabilizer.toDouble(), brushStreamline) > 0.0
+        }
+
+    /**
+     * 前缓冲预览有效分级 (PR #82 review 问题 4)。
+     * 平滑/防抖开启时引擎落墨走平滑后轨迹 (几何内切+滞后), 而预览回填段走原始
+     * 物理点 —— TIER_1 全宽假线必与真墨撕裂, 故钳制为 TIER_2 发丝导引线。
+     * 注意: 卡尔曼输入保持原始物理点 (预测的是物理笔尖), 只降级回填段渲染,
+     * 不碰预测本身。
+     */
+    val effectivePredictionTier: PredictionFidelityTier
+        get() {
+            val tier = currentBrushPredictionTier
+            return if (tier == PredictionFidelityTier.TIER_1 && isStrokeSmoothingActive) {
+                PredictionFidelityTier.TIER_2
+            } else {
+                tier
+            }
+        }
+
+    /**
+     * 上游原版判定: 当前笔刷是否适用于 OEM 硬件前向预测尾线。
+     * (前缓冲预测开启时由 [currentBrushPredictionTier] 分级接管, 本判定仅服务上游尾线路径)
      */
     val isCurrentBrushPredictionEligible: Boolean
         get() {
@@ -1616,6 +1693,7 @@ class PaintViewModel : ViewModel() {
     // 画布内富文本排版状态 (In-place Typography)
     var typographyConfig by mutableStateOf(TypographyConfig())
     var isTypographyEditing by mutableStateOf(false)
+    var typographySnapGuides by mutableStateOf<List<com.reverie.paint.model.TypographySnapGuide>>(emptyList())
 
     var pressureCurvePreset by mutableIntStateOf(0) // 0: 线性, 1: 轻压灵敏, 2: 重压偏硬, 3: S型, 4: 自定义
     var pressureControlPoints by mutableStateOf(
@@ -1636,6 +1714,7 @@ class PaintViewModel : ViewModel() {
     var fillCloseGap by mutableIntStateOf(4) // 闭合空隙 (0..16 px)
     var fillOpacity by mutableDoubleStateOf(1.0)
     var fillCompositeOp by mutableStateOf("normal")
+    internal var fillPattern by mutableStateOf<FillPattern?>(null)
 
     var gradientType by mutableIntStateOf(0) // 0: 线性, 1: 径向, 2: 角度
     var gradientRepeat by mutableIntStateOf(0) // 0: 无, 1: 重复, 2: 往返
@@ -1645,6 +1724,8 @@ class PaintViewModel : ViewModel() {
     var shapeFillMode by mutableIntStateOf(0) // 0: 仅描边, 1: 仅填充, 2: 描边与填充
     var shapeKeepAspect by mutableStateOf(false)
     val shapeState = ShapeState()
+
+    var measureStrokeWidth by mutableFloatStateOf(2.5f)
 
     var selectionMode by mutableIntStateOf(0) // 0: 替换, 1: 添加, 2: 减去, 3: 相交
     var lassoSubMode by mutableIntStateOf(LassoSubMode.FREEHAND) // 0: 自由描画, 1: 折线, 2: 自由+折线
@@ -2062,8 +2143,92 @@ class PaintViewModel : ViewModel() {
         }
     }
 
+    fun updateQuickShapeQuadrilateralEnabled(enable: Boolean) {
+        quickShapeQuadrilateralEnabled = enable
+        if (hasAppContext()) {
+            appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
+                .edit().putBoolean("quickShapeQuadrilateralEnabled", enable).apply()
+        }
+    }
+
+    fun updateQuickShapeConversionsEnabled(enable: Boolean) {
+        quickShapeConversionsEnabled = enable
+        if (hasAppContext()) {
+            appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
+                .edit().putBoolean("quickShapeConversionsEnabled", enable).apply()
+        }
+    }
+
+    fun updateQuickShapeCurveEnabled(enable: Boolean) {
+        quickShapeCurveEnabled = enable
+        if (hasAppContext()) {
+            appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
+                .edit().putBoolean("quickShapeCurveEnabled", enable).apply()
+        }
+    }
+
+    fun updateQuickShapeRelaxedEnabled(enable: Boolean) {
+        quickShapeRelaxedEnabled = enable
+        if (hasAppContext()) {
+            appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
+                .edit().putBoolean("quickShapeRelaxedEnabled", enable).apply()
+        }
+    }
+
+    fun updateQuickShapeArcEnabled(enable: Boolean) {
+        quickShapeArcEnabled = enable
+        if (hasAppContext()) {
+            appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
+                .edit().putBoolean("quickShapeArcEnabled", enable).apply()
+        }
+    }
+
+    fun updateQuickShapeBoxHandlesEnabled(enable: Boolean) {
+        quickShapeBoxHandlesEnabled = enable
+        if (hasAppContext()) {
+            appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
+                .edit().putBoolean("quickShapeBoxHandlesEnabled", enable).apply()
+        }
+    }
+
+    fun updateQuickShapeCurvedContourEnabled(enable: Boolean) {
+        quickShapeCurvedContourEnabled = enable
+        if (hasAppContext()) {
+            appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
+                .edit().putBoolean("quickShapeCurvedContourEnabled", enable).apply()
+        }
+    }
+
+    fun updateQuickShapeContourEnabled(enable: Boolean) {
+        quickShapeContourEnabled = enable
+        if (hasAppContext()) {
+            appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
+                .edit().putBoolean("quickShapeContourEnabled", enable).apply()
+        }
+    }
+
+    fun updateQuickShapeAngleSnapEnabled(enable: Boolean) {
+        quickShapeAngleSnapEnabled = enable
+        if (hasAppContext()) {
+            appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
+                .edit().putBoolean("quickShapeAngleSnapEnabled", enable).apply()
+        }
+    }
+    fun updateQuickShapePerPointPressureEnabled(enable: Boolean) {
+        quickShapePerPointPressureEnabled = enable
+        if (hasAppContext()) {
+            appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
+                .edit().putBoolean("quickShapePerPointPressureEnabled", enable).apply()
+        }
+    }
+
     fun updateQuickShapeEnabled(enable: Boolean) {
-        quickShapeEnabled = false
+        quickShapeEnabled = enable
+        if (!enable) cancelQuickShape()
+        if (hasAppContext()) {
+            appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
+                .edit().putBoolean("quickShapeEnabledV2", enable).apply()
+        }
     }
 
     fun updateOppoPencilModelMode(mode: String) {
@@ -2236,9 +2401,57 @@ class PaintViewModel : ViewModel() {
     fun updateStylusStrokePredictionEnabled(enabled: Boolean) {
         stylusStrokePredictionEnabled = enabled
         motionPredictorEnabled = enabled
+        if (enabled && frontBufferPredictionEnabled) {
+            // 对称互斥: 打开旧开关时关闭新开关, 两者永不同时开启 (last wins)。
+            updateFrontBufferPredictionEnabled(false)
+        }
         if (::appContext.isInitialized) {
             appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
                 .edit().putBoolean("stylusStrokePredictionEnabled", enabled).apply()
+        }
+    }
+
+    fun updateFrontBufferPredictionEnabled(enabled: Boolean) {
+        frontBufferPredictionEnabled = enabled
+        if (enabled && stylusStrokePredictionEnabled) {
+            // 新旧互斥 (PR #82 review): 前缓冲开启时, 上游 OEM 尾线在分发层被短路恒为
+            // 死开关 (见 CanvasTouchView 双系统分派), 此处直接关闭旧开关, 免得用户困惑。
+            updateStylusStrokePredictionEnabled(false)
+        }
+        if (::appContext.isInitialized) {
+            appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
+                .edit().putBoolean("frontBufferPredictionEnabled", enabled).apply()
+        }
+    }
+
+    fun updateStylusPredictionMaster(enabled: Boolean) {
+        if (!enabled) {
+            updateStylusStrokePredictionEnabled(false)
+            updateFrontBufferPredictionEnabled(false)
+        } else {
+            // 重新开启时默认优先选择当前记忆的算法，或默认开启硬件 SDK 预测
+            val prefAlgo = if (::appContext.isInitialized) {
+                appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
+                    .getString("stylusPredictionLastAlgorithm", "HARDWARE") ?: "HARDWARE"
+            } else "HARDWARE"
+
+            if (prefAlgo == "SOFTWARE") {
+                updateFrontBufferPredictionEnabled(true)
+            } else {
+                updateStylusStrokePredictionEnabled(true)
+            }
+        }
+    }
+
+    fun updateStylusPredictionAlgorithm(algoType: String) {
+        if (::appContext.isInitialized) {
+            appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
+                .edit().putString("stylusPredictionLastAlgorithm", algoType).apply()
+        }
+        if (algoType == "SOFTWARE") {
+            updateFrontBufferPredictionEnabled(true)
+        } else {
+            updateStylusStrokePredictionEnabled(true)
         }
     }
 
@@ -2287,6 +2500,14 @@ class PaintViewModel : ViewModel() {
         if (::appContext.isInitialized) {
             appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
                 .edit().putString("huaweiDoubleTapAction", actionId).apply()
+        }
+    }
+
+    fun updateHuaweiSqueezeAction(actionId: String) {
+        huaweiSqueezeAction = actionId
+        if (::appContext.isInitialized) {
+            appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
+                .edit().putString("huaweiSqueezeAction", actionId).apply()
         }
     }
 
@@ -2364,6 +2585,7 @@ class PaintViewModel : ViewModel() {
 
     fun updateXiaomiPencilModelMode(mode: String) {
         xiaomiPencilModelMode = mode
+        stylusDriver?.syncSettings()
         if (::appContext.isInitialized) {
             appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
                 .edit().putString("xiaomiPencilModelMode", mode).apply()
@@ -2372,6 +2594,7 @@ class PaintViewModel : ViewModel() {
 
     fun updateXiaomiPrimaryButtonAction(actionId: String) {
         xiaomiPrimaryButtonAction = actionId
+        stylusDriver?.syncSettings()
         if (::appContext.isInitialized) {
             appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
                 .edit().putString("xiaomiPrimaryButtonAction", actionId).apply()
@@ -2380,6 +2603,7 @@ class PaintViewModel : ViewModel() {
 
     fun updateXiaomiSecondaryButtonAction(actionId: String) {
         xiaomiSecondaryButtonAction = actionId
+        stylusDriver?.syncSettings()
         if (::appContext.isInitialized) {
             appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
                 .edit().putString("xiaomiSecondaryButtonAction", actionId).apply()
@@ -2388,6 +2612,7 @@ class PaintViewModel : ViewModel() {
 
     fun updateXiaomiFocusButtonAction(actionId: String) {
         xiaomiFocusButtonAction = actionId
+        stylusDriver?.syncSettings()
         if (::appContext.isInitialized) {
             appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
                 .edit().putString("xiaomiFocusButtonAction", actionId).apply()
@@ -2396,6 +2621,7 @@ class PaintViewModel : ViewModel() {
 
     fun updateXiaomiDoubleTapAction(actionId: String) {
         xiaomiDoubleTapAction = actionId
+        stylusDriver?.syncSettings()
         if (::appContext.isInitialized) {
             appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
                 .edit().putString("xiaomiDoubleTapAction", actionId).apply()
@@ -2404,6 +2630,7 @@ class PaintViewModel : ViewModel() {
 
     fun updateXiaomiSideButtonErase(enabled: Boolean) {
         xiaomiSideButtonErase = enabled
+        stylusDriver?.syncSettings()
         if (::appContext.isInitialized) {
             appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
                 .edit().putBoolean("xiaomiSideButtonErase", enabled).apply()
@@ -2412,6 +2639,7 @@ class PaintViewModel : ViewModel() {
 
     fun updateXiaomiSqueezeAction(actionId: String) {
         xiaomiSqueezeAction = actionId
+        stylusDriver?.syncSettings()
         if (::appContext.isInitialized) {
             appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
                 .edit().putString("xiaomiSqueezeAction", actionId).apply()
@@ -2420,6 +2648,7 @@ class PaintViewModel : ViewModel() {
 
     fun updateXiaomiSlideAction(actionId: String) {
         xiaomiSlideAction = actionId
+        stylusDriver?.syncSettings()
         if (::appContext.isInitialized) {
             appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
                 .edit().putString("xiaomiSlideAction", actionId).apply()
@@ -2428,6 +2657,7 @@ class PaintViewModel : ViewModel() {
 
     fun updateXiaomiSlideSensitivity(sensitivity: String) {
         xiaomiSlideSensitivity = sensitivity
+        stylusDriver?.syncSettings()
         if (::appContext.isInitialized) {
             appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
                 .edit().putString("xiaomiSlideSensitivity", sensitivity).apply()
@@ -2440,6 +2670,57 @@ class PaintViewModel : ViewModel() {
         if (::appContext.isInitialized) {
             appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
                 .edit().putBoolean("xiaomiInPenHapticsEnabled", enabled).apply()
+        }
+    }
+
+    fun updateVivoPencilModelMode(mode: String) {
+        vivoPencilModelMode = mode
+        stylusDriver?.syncSettings()
+        if (::appContext.isInitialized) {
+            appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
+                .edit().putString("vivoPencilModelMode", mode).apply()
+        }
+    }
+
+    fun updateVivoDoubleTapAction(actionId: String) {
+        vivoDoubleTapAction = actionId
+        if (::appContext.isInitialized) {
+            appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
+                .edit().putString("vivoDoubleTapAction", actionId).apply()
+        }
+    }
+
+    fun updateVivoPrimaryClickAction(actionId: String) {
+        vivoPrimaryClickAction = actionId
+        if (::appContext.isInitialized) {
+            appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
+                .edit().putString("vivoPrimaryClickAction", actionId).apply()
+        }
+    }
+
+    fun updateVivoSecondaryClickAction(actionId: String) {
+        vivoSecondaryClickAction = actionId
+        if (::appContext.isInitialized) {
+            appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
+                .edit().putString("vivoSecondaryClickAction", actionId).apply()
+        }
+    }
+
+    fun updateVivoSideButtonErase(enabled: Boolean) {
+        vivoSideButtonErase = enabled
+        if (::appContext.isInitialized) {
+            appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
+                .edit().putBoolean("vivoSideButtonErase", enabled).apply()
+        }
+    }
+
+    fun updateVivoWritingVibrateEnabled(enabled: Boolean) {
+        vivoWritingVibrateEnabled = enabled
+        // 关闭时立即停掉可能在振的笔身 (VivoStylusAdapter.syncSettings 处理边沿)
+        stylusDriver?.syncSettings()
+        if (::appContext.isInitialized) {
+            appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
+                .edit().putBoolean("vivoWritingVibrateEnabled", enabled).apply()
         }
     }
 
@@ -2457,6 +2738,15 @@ class PaintViewModel : ViewModel() {
             appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
                 .edit().putString("genericSecondaryButtonAction", actionId).apply()
         }
+    }
+
+    fun updateGenericStylusEnabled(enabled: Boolean) {
+        genericStylusEnabled = enabled
+        if (::appContext.isInitialized) {
+            appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
+                .edit().putBoolean("genericStylusEnabled", enabled).apply()
+        }
+        stylusDriver?.syncSettings()
     }
 
     fun updateGenericSideButtonErase(enabled: Boolean) {
@@ -2603,6 +2893,17 @@ class PaintViewModel : ViewModel() {
                 .getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
                 .edit()
                 .putBoolean("leftHandMode", enabled)
+                .apply()
+        }
+    }
+
+    fun updateLayerHeaderInheritAlpha(enabled: Boolean) {
+        layerHeaderInheritAlpha = enabled
+        if (::appContext.isInitialized) {
+            appContext
+                .getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
+                .edit()
+                .putBoolean("layerHeaderInheritAlpha", enabled)
                 .apply()
         }
     }
@@ -2782,6 +3083,22 @@ class PaintViewModel : ViewModel() {
         }
     }
 
+    fun updateAutoSaveMaxSnapshots(maxCount: Int) {
+        val clamped = maxCount.coerceIn(
+            com.reverie.paint.model.AutoSaveSnapshotPolicy.MIN_MAX_SNAPSHOTS,
+            com.reverie.paint.model.AutoSaveSnapshotPolicy.MAX_MAX_SNAPSHOTS,
+        )
+        autoSaveMaxSnapshots = clamped
+        if (::appContext.isInitialized) {
+            appContext
+                .getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
+                .edit()
+                .putInt("autoSaveMaxSnapshots", clamped)
+                .apply()
+            AutoSaveHistoryManager.pruneToLimit(appContext, clamped)
+        }
+    }
+
     fun updateAutoSaveToastEnabled(enabled: Boolean) {
         autoSaveToastEnabled = enabled
         if (::appContext.isInitialized) {
@@ -2852,6 +3169,7 @@ class PaintViewModel : ViewModel() {
             quickSliderHeightDp = prefs.getInt("quickSliderHeightDp", 175).coerceIn(100, 260)
             toolbarSqueezedWarningDismissed = prefs.getBoolean("toolbarSqueezedWarningDismissed", false)
             panelPinningEnabled = prefs.getBoolean("panelPinningEnabled", false)
+            layerHeaderInheritAlpha = prefs.getBoolean("layerHeaderInheritAlpha", false)
             leftHandMode = prefs.getBoolean("leftHandMode", false)
             selectionMaskColorHex = prefs.getString("selection_mask_color", "#141416") ?: "#141416"
             selectionMaskOpacity = prefs.getFloat("selection_mask_opacity", 0.47f).coerceIn(0.10f, 0.90f)
@@ -2884,12 +3202,18 @@ class PaintViewModel : ViewModel() {
             stylusAudioType = StylusAudioType.fromOrdinal(prefs.getInt("stylusAudioType", StylusAudioType.PENCIL.ordinal))
             samsungSideButtonErase = prefs.getBoolean("samsungSideButtonErase", true)
             stylusStrokePredictionEnabled = prefs.getBoolean("stylusStrokePredictionEnabled", true)
+            // 迁移: 旧版"前缓冲笔尖直出"独立开关升级为"前缓冲预测"总开关, 保留老用户选择
+            frontBufferPredictionEnabled = prefs.getBoolean(
+                "frontBufferPredictionEnabled",
+                prefs.getBoolean("stylusFrontBufferPreviewEnabled", false),
+            )
             motionPredictorEnabled = stylusStrokePredictionEnabled
             samsungSingleClickAction = prefs.getString("samsungSingleClickAction", "toggle_eraser") ?: "toggle_eraser"
             samsungDoubleClickAction = prefs.getString("samsungDoubleClickAction", "undo") ?: "undo"
             samsungLongPressAction = prefs.getString("samsungLongPressAction", "tool_picker") ?: "tool_picker"
             huaweiPencilModelMode = prefs.getString("huaweiPencilModelMode", "AUTO") ?: "AUTO"
             huaweiDoubleTapAction = prefs.getString("huaweiDoubleTapAction", "toggle_eraser") ?: "toggle_eraser"
+            huaweiSqueezeAction = prefs.getString("huaweiSqueezeAction", "tool_color") ?: "tool_color"
             huaweiSingleClickAction = prefs.getString("huaweiSingleClickAction", "none") ?: "none"
             huaweiLongPressAction = prefs.getString("huaweiLongPressAction", "tool_color") ?: "tool_color"
             huaweiSideButtonErase = prefs.getBoolean("huaweiSideButtonErase", true)
@@ -2909,6 +3233,13 @@ class PaintViewModel : ViewModel() {
             xiaomiSlideAction = prefs.getString("xiaomiSlideAction", "adjust_brush_size") ?: "adjust_brush_size"
             xiaomiSlideSensitivity = prefs.getString("xiaomiSlideSensitivity", "normal") ?: "normal"
             xiaomiInPenHapticsEnabled = prefs.getBoolean("xiaomiInPenHapticsEnabled", true)
+            vivoPencilModelMode = prefs.getString("vivoPencilModelMode", "AUTO") ?: "AUTO"
+            vivoDoubleTapAction = prefs.getString("vivoDoubleTapAction", "toggle_eraser") ?: "toggle_eraser"
+            vivoPrimaryClickAction = prefs.getString("vivoPrimaryClickAction", "toggle_eraser") ?: "toggle_eraser"
+            vivoSecondaryClickAction = prefs.getString("vivoSecondaryClickAction", "tool_picker") ?: "tool_picker"
+            vivoSideButtonErase = prefs.getBoolean("vivoSideButtonErase", true)
+            vivoWritingVibrateEnabled = prefs.getBoolean("vivoWritingVibrateEnabled", true)
+            genericStylusEnabled = prefs.getBoolean("genericStylusEnabled", false)
             genericPrimaryButtonAction = prefs.getString("genericPrimaryButtonAction", "toggle_eraser") ?: "toggle_eraser"
             genericSecondaryButtonAction = prefs.getString("genericSecondaryButtonAction", "undo") ?: "undo"
             genericSideButtonErase = prefs.getBoolean("genericSideButtonErase", true)
@@ -2930,7 +3261,17 @@ class PaintViewModel : ViewModel() {
             brushCursorMode = prefs.getInt("brushCursorMode", 3)
             eraserCursorMode = prefs.getInt("eraserCursorMode", 3)
             cursorStyleMode = prefs.getInt("cursorStyleMode", 5)
-            quickShapeEnabled = false
+            quickShapeEnabled = prefs.getBoolean("quickShapeEnabledV2", false)
+            quickShapeQuadrilateralEnabled = prefs.getBoolean("quickShapeQuadrilateralEnabled", false)
+            quickShapeConversionsEnabled = prefs.getBoolean("quickShapeConversionsEnabled", false)
+            quickShapeCurveEnabled = prefs.getBoolean("quickShapeCurveEnabled", false)
+            quickShapeRelaxedEnabled = prefs.getBoolean("quickShapeRelaxedEnabled", false)
+            quickShapeArcEnabled = prefs.getBoolean("quickShapeArcEnabled", false)
+            quickShapeBoxHandlesEnabled = prefs.getBoolean("quickShapeBoxHandlesEnabled", false)
+            quickShapeCurvedContourEnabled = prefs.getBoolean("quickShapeCurvedContourEnabled", false)
+            quickShapeContourEnabled = prefs.getBoolean("quickShapeContourEnabled", false)
+            quickShapeAngleSnapEnabled = prefs.getBoolean("quickShapeAngleSnapEnabled", false)
+            quickShapePerPointPressureEnabled = prefs.getBoolean("quickShapePerPointPressureEnabled", false)
             try {
                 val rawView = prefs.getString("view_settings", null)
                 if (rawView != null) {
@@ -2964,6 +3305,13 @@ class PaintViewModel : ViewModel() {
 
             autoSaveEnabled = prefs.getBoolean("autoSaveEnabled", true)
             autoSaveIntervalMinutes = prefs.getInt("autoSaveIntervalMinutes", 5).coerceIn(1, 60)
+            autoSaveMaxSnapshots = prefs.getInt(
+                "autoSaveMaxSnapshots",
+                com.reverie.paint.model.AutoSaveSnapshotPolicy.DEFAULT_MAX_SNAPSHOTS,
+            ).coerceIn(
+                com.reverie.paint.model.AutoSaveSnapshotPolicy.MIN_MAX_SNAPSHOTS,
+                com.reverie.paint.model.AutoSaveSnapshotPolicy.MAX_MAX_SNAPSHOTS,
+            )
             autoSaveToastEnabled = prefs.getBoolean("autoSaveToastEnabled", true)
             maxUndoSteps = prefs.getInt("maxUndoSteps", 50).coerceIn(10, 200)
             promptSaveOnExit = prefs.getBoolean("promptSaveOnExit", true)
@@ -3037,22 +3385,14 @@ class PaintViewModel : ViewModel() {
                 } catch (_: Exception) {}
             }
 
-            // 参考窗口持久化恢复
-            referenceWindowOpen = prefs.getBoolean("ref_window_open", false)
+            // Window placement remains a device preference; images and view state belong to the document.
             referenceWindowX = prefs.getFloat("ref_window_x", 80f)
             referenceWindowY = prefs.getFloat("ref_window_y", 140f)
             referenceWindowWidth = prefs.getFloat("ref_window_w", 260f)
             referenceWindowHeight = prefs.getFloat("ref_window_h", 300f)
-            referenceIsGrayscale = prefs.getBoolean("ref_is_grayscale", false)
             referenceAllowRotation = prefs.getBoolean("ref_allow_rotation", true)
-            referenceIsFlipped = prefs.getBoolean("ref_is_flipped", false)
-            referenceActiveTab = prefs.getInt("ref_active_tab", 0)
-            referenceBarsCollapsed = prefs.getBoolean("ref_bars_collapsed", false)
-            referenceZoom = prefs.getFloat("ref_zoom", 1f)
-            referenceRotation = prefs.getFloat("ref_rotation", 0f)
-            referencePanX = prefs.getFloat("ref_pan_x", 0f)
-            referencePanY = prefs.getFloat("ref_pan_y", 0f)
-            loadPersistedReferenceImages()
+            hasLegacyReferenceImages = prefs.getInt("ref_images_count", 0) > 0 &&
+                File(appContext.filesDir, "ref_images").isDirectory
 
             // 快捷操作浮窗持久化恢复
             quickActionWindowOpen = prefs.getBoolean("quick_action_open", false)
@@ -3092,6 +3432,20 @@ class PaintViewModel : ViewModel() {
             if (brushOrderStr.isNotBlank()) {
                 quickBrushOrder = brushOrderStr.split(",").filter { it.isNotBlank() }
             }
+
+            // 快捷颜色浮窗持久化恢复
+            quickColorWindowOpen = prefs.getBoolean("quick_color_open", false)
+            quickColorWindowX = prefs.getFloat("quick_color_x", -1f)
+            quickColorWindowY = prefs.getFloat("quick_color_y", -1f)
+            quickColorCollapsed = prefs.getBoolean("quick_color_collapsed", false)
+            quickColorTab = prefs.getInt("quick_color_tab", 0)
+
+            // 快捷图层浮窗持久化恢复
+            quickLayerWindowOpen = prefs.getBoolean("quick_layer_open", false)
+            quickLayerWindowX = prefs.getFloat("quick_layer_x", -1f)
+            quickLayerWindowY = prefs.getFloat("quick_layer_y", -1f)
+            quickLayerCollapsed = prefs.getBoolean("quick_layer_collapsed", false)
+            quickLayerPinned = prefs.getBoolean("quick_layer_pinned", true)
 
             applyCurrentTheme()
         }
@@ -3573,6 +3927,7 @@ class PaintViewModel : ViewModel() {
         val depth: Int,
         val colorLabel: Int,
         val clipped: Boolean,
+        val alphaInherited: Boolean = false,
         val isBackground: Boolean,
         val soloed: Boolean,
         val opacity: Double,
@@ -3910,8 +4265,114 @@ class PaintViewModel : ViewModel() {
             com.reverie.paint.model.Tool.FILL,
             com.reverie.paint.model.Tool.LASSO,
         )
+        const val PRESENT_ESTIMATE_MS = 14L // 补偿 UI draw + SurfaceFlinger 合成上屏延迟 (~1~1.5 帧 VSYNC)
+        const val PRESENT_TAIL_MS = 8L      // onDraw 提交 + HWUI/SF 合成 ~1 帧 @120Hz (保守常数)
         const val STROKE_BATCH_CAPACITY = 256
         const val STROKE_SAMPLE_STRIDE = 6
+
+        /**
+         * 点刷家族判定: 印章/喷溅/飞溅/海绵/耙/噪点/粒子/网格/曲线/网点类预设。
+         * 这类笔刷以大间距散点落墨, 连续盖印/连续假线都会失真, STAMP 与假线一律禁行。
+         */
+        private fun isDottedStampFamily(presetName: String): Boolean {
+            return presetName.contains("Stamp", ignoreCase = true) ||
+                presetName.contains("Spray", ignoreCase = true) ||
+                presetName.contains("Splat", ignoreCase = true) ||
+                presetName.contains("Sponge", ignoreCase = true) ||
+                presetName.contains("Rake", ignoreCase = true) ||
+                presetName.contains("Noise", ignoreCase = true) ||
+                presetName.contains("Particle", ignoreCase = true) ||
+                presetName.contains("Grid", ignoreCase = true) ||
+                presetName.contains("Curve", ignoreCase = true) ||
+                presetName.contains("Screentone", ignoreCase = true)
+        }
+
+        fun resolvePredictionTier(
+            predictionEnabled: Boolean,
+            toolId: String,
+            compositeOp: String,
+            scatter: Double,
+            spacing: Double,
+            opacity: Double,
+            flow: Double,
+            textureEnabled: Boolean,
+            presetGroup: String?,
+            presetName: String
+        ): PredictionFidelityTier {
+            if (!predictionEnabled) return PredictionFidelityTier.NONE
+            if (toolId != "brush" && toolId != "eraser") return PredictionFidelityTier.NONE
+            if (toolId == "smudge") return PredictionFidelityTier.NONE
+            if (compositeOp != "normal" && compositeOp != "erase" && compositeOp.isNotEmpty()) return PredictionFidelityTier.NONE
+
+            // 1. 特殊打点/严重散布绝对禁止
+            if (scatter > 0.15) return PredictionFidelityTier.NONE
+            if (spacing > 0.40) return PredictionFidelityTier.NONE
+
+            // 2. 极低不透明度（如极度透明的罩染）直接拦截在 NONE，防范伪线突兀
+            if (opacity < 0.35) return PredictionFidelityTier.NONE
+
+            // 2.5 预设分组判定 (STAMP 与硬拦截共用)
+            val grp = presetGroup?.ifEmpty { null } ?: inferBrushGroup(presetName)
+
+            // 2.6 STAMP: 真实笔尖戳印预览 (水彩/纹理与排线/绘画类)，仅 brush 工具。
+            // v1 假线对这类笔刷是"错误反馈" (形状颜色流量全对不上)，但真实 tip 戳印
+            // 在形状颜色上与真墨一致，仅湿润累积为近似 (预览只存活 1~2 帧，真墨即达覆盖)。
+            // 点刷家族 (印章/喷溅/飞溅/海绵/耙/噪点/粒子/网格/曲线/网点) 除外：大间距散点笔刷
+            // 连续盖印反而失真，走后方硬拦截。橡皮擦不参与 (挖除语义无法用叠加表达)。
+            // tip 不可解码 (如 GIH 动画笔尖) 时渲染侧回落 TIER_2 发丝线。
+            if (toolId == "brush" && !isDottedStampFamily(presetName) &&
+                (grp == "水彩" || grp == "纹理与排线" || grp == "绘画" ||
+                    presetName.contains("Water", ignoreCase = true) ||
+                    presetName.contains("Wet", ignoreCase = true))
+            ) {
+                return PredictionFidelityTier.STAMP
+            }
+
+            // 3. 笔刷预设与分组检查 (硬拦截)
+
+            // Tier 3 (NONE): 严格拦截的特征 (印章、喷溅、特效、网格、形状、水彩、色彩混合)
+            // 水彩/湿墨类真机实测: 假线 (纯色/固定宽) 与真墨 (纹理/混色/低流量) 形状颜色流量全对不上,
+            // "错误的早期反馈"比"无预览"更伤跟手感 (同 WET-INK-EXPERIMENT.md 的替换跳变教训),
+            // 故恢复硬拦截, 保持纯真墨管线。保真预览需像素级湿墨方案, 不在此路径。
+            val hardExcludedGroups = setOf("印章与喷溅", "特效与滤镜", "形状", "水彩", "混合")
+            if (hardExcludedGroups.contains(grp)) return PredictionFidelityTier.NONE
+
+            if (presetName.contains("Stamp", ignoreCase = true) ||
+                presetName.contains("Spray", ignoreCase = true) ||
+                presetName.contains("Splat", ignoreCase = true) ||
+                presetName.contains("Sponge", ignoreCase = true) ||
+                presetName.contains("Rake", ignoreCase = true) ||
+                presetName.contains("Noise", ignoreCase = true) ||
+                presetName.contains("Particle", ignoreCase = true) ||
+                presetName.contains("Grid", ignoreCase = true) ||
+                presetName.contains("Curve", ignoreCase = true) ||
+                presetName.contains("Screentone", ignoreCase = true) ||
+                presetName.contains("Water", ignoreCase = true) ||
+                presetName.contains("Wet", ignoreCase = true) ||
+                presetName.contains("Blender", ignoreCase = true) ||
+                presetName.contains("Smudge", ignoreCase = true)) {
+                return PredictionFidelityTier.NONE
+            }
+
+            // 4. TIER_1 严格白名单准入 (仅基础纯色勾线、圆笔、墨水、标记笔，全段空窗回填)
+            val isWhitelistedGroup = grp == "基础" || grp == "勾线" || grp == "马克笔"
+            val isTextureActive = textureEnabled
+            val isLowFlowOrOpacity = (flow > 0.0 && flow < 0.60) || opacity < 0.60
+            val isSoftOrAirbrush = grp == "喷枪" ||
+                presetName.contains("Airbrush", ignoreCase = true) ||
+                presetName.contains("Soft", ignoreCase = true) ||
+                presetName.contains("Fuzzy", ignoreCase = true) ||
+                presetName.contains("Blur", ignoreCase = true)
+
+            if (isWhitelistedGroup && !isTextureActive && !isLowFlowOrOpacity && !isSoftOrAirbrush) {
+                return PredictionFidelityTier.TIER_1
+            }
+
+            // 5. TIER_2 防御式安全降级 (铅笔、速写、纹理排线、油画绘画、带纹理、低流量及所有未知笔刷)
+            // 采用发丝级导引线 (0.35x 笔宽, 上限 4dp, 低透明度), 与真墨差异最小化 ——
+            // 真机结论: 加粗/提透明会让"假线与真墨对不上"变得显眼, 错误反馈比无反馈更伤跟手感
+            return PredictionFidelityTier.TIER_2
+        }
     }
 
     @Volatile private var pendingSampleX = 0.0
@@ -3920,11 +4381,61 @@ class PaintViewModel : ViewModel() {
     private val strokeBatchLock = Any()
     private val strokeBatchCoords = FloatArray(STROKE_BATCH_CAPACITY * STROKE_SAMPLE_STRIDE)
     private val strokeDrainCoords = FloatArray(STROKE_BATCH_CAPACITY * STROKE_SAMPLE_STRIDE)
+    private val strokeBatchTimes = LongArray(STROKE_BATCH_CAPACITY)
+    private val strokeDrainTimes = LongArray(STROKE_BATCH_CAPACITY)
     private var strokeBatchCount = 0
     private var batchOverflowLogCounter = 0 // queueStrokeMove 仅 UI 线程调用
     @Volatile private var strokeBatchQueued = false
     @Volatile private var lastQueuedInputEventTime = 0L
     @Volatile private var lastQueuedUptime = 0L
+    @Volatile var lastE2ePipelineMs: Long = 40L
+    data class RenderedFrontier(
+        val docX: Float,
+        val docY: Float,
+        val timeMs: Long
+    )
+
+    @Volatile
+    var currentRenderedFrontier: RenderedFrontier? = null
+
+    val lastRenderedFrontierValid: Boolean
+        get() = currentRenderedFrontier != null
+
+    val lastRenderedFrontierDocX: Float
+        get() = currentRenderedFrontier?.docX ?: Float.NaN
+
+    val lastRenderedFrontierDocY: Float
+        get() = currentRenderedFrontier?.docY ?: Float.NaN
+
+    val lastRenderedFrontierTimeMs: Long
+        get() = currentRenderedFrontier?.timeMs ?: 0L
+
+    fun resetRenderedFrontier() {
+        currentRenderedFrontier = null
+    }
+
+    fun updateRenderedFrontier(docX: Float, docY: Float, timeMs: Long) {
+        if (docX.isFinite() && docY.isFinite()) {
+            currentRenderedFrontier = RenderedFrontier(docX, docY, timeMs)
+        }
+    }
+
+    /**
+     * 估计的"已绘制→已上屏"呈现延迟 (invalidate→onDraw + HWUI/合成尾)。
+     * 预览锚点需要它把起点从"引擎已绘制前沿"回退到"屏幕上真实可见的墨迹末端"。
+     */
+    val presentLagEstimateMs: Long
+        get() {
+            val measuredPresent = PerfTrace.presentWaitP50Ms
+            return if (measuredPresent in 2L..35L) {
+                (measuredPresent + PRESENT_TAIL_MS).coerceAtLeast(PRESENT_ESTIMATE_MS)
+            } else {
+                PRESENT_ESTIMATE_MS
+            }
+        }
+
+    val effectivePipelineDelayMs: Long
+        get() = (lastE2ePipelineMs + presentLagEstimateMs).coerceIn(20L, 85L)
     private var perfLogCounter = 0
 
     private val strokeBatchRunnable = Runnable {
@@ -3936,6 +4447,7 @@ class PaintViewModel : ViewModel() {
             strokeBatchCount = 0
             if (n > 0) {
                 System.arraycopy(strokeBatchCoords, 0, strokeDrainCoords, 0, n * STROKE_SAMPLE_STRIDE)
+                System.arraycopy(strokeBatchTimes, 0, strokeDrainTimes, 0, n)
             }
         }
         pendingCoreOps.decrementPositive()
@@ -3957,10 +4469,21 @@ class PaintViewModel : ViewModel() {
             val tDone = android.os.SystemClock.uptimeMillis()
             val queueWait = tDispatch - lastQueuedUptime
             val e2e = if (lastQueuedInputEventTime > 0) tDone - lastQueuedInputEventTime else 0L
+            if (e2e in 5L..250L) {
+                lastE2ePipelineMs = e2e
+            }
+            val lastSampleIdx = n - 1
+            val lastCoordIdx = lastSampleIdx * STROKE_SAMPLE_STRIDE
+            updateRenderedFrontier(
+                strokeDrainCoords[lastCoordIdx],
+                strokeDrainCoords[lastCoordIdx + 1],
+                strokeDrainTimes[lastSampleIdx]
+            )
+
             if (++perfLogCounter % 5 == 0) {
                 android.util.Log.i(
                     "ReveriePerf",
-                    "StrokePerf: n=$n queueWait=${queueWait}ms krita=${dtKrita}ms render=${dtRender}ms e2e=${e2e}ms"
+                    "StrokePerf: n=$n queueWait=${queueWait}ms krita=${dtKrita}ms render=${dtRender}ms e2e=${e2e}ms effectiveDelay=${effectivePipelineDelayMs}ms presentWait=${PerfTrace.presentWaitP50Ms}ms frontierErr=${"%.1f".format(PerfTrace.frontierErrP50Px)}px"
                 )
             }
         }
@@ -3999,6 +4522,7 @@ class PaintViewModel : ViewModel() {
                 strokeBatchCoords[o + 3] = safeTiltX
                 strokeBatchCoords[o + 4] = safeTiltY
                 strokeBatchCoords[o + 5] = safeRotation
+                strokeBatchTimes[strokeBatchCount] = inputEventTimeMs
                 strokeBatchCount++
             } else {
                 // 队列满 (渲染线程被长任务阻塞): 覆盖最后一个样本而非静默
@@ -4011,6 +4535,7 @@ class PaintViewModel : ViewModel() {
                 strokeBatchCoords[o + 3] = safeTiltX
                 strokeBatchCoords[o + 4] = safeTiltY
                 strokeBatchCoords[o + 5] = safeRotation
+                strokeBatchTimes[strokeBatchCount - 1] = inputEventTimeMs
                 if (++batchOverflowLogCounter % 60 == 1) {
                     android.util.Log.w(
                         "ReveriePerf",
@@ -4032,6 +4557,7 @@ class PaintViewModel : ViewModel() {
         synchronized(strokeBatchLock) {
             strokeBatchCount = 0
         }
+        resetRenderedFrontier()
     }
 
     // Airbrush hold-still ink flow: a self-rescheduling timer on the render
@@ -4229,7 +4755,7 @@ class PaintViewModel : ViewModel() {
         PerfTrace.tick("render.calls", 1000L)
         if (!ok) {
             if (ReverieCoreBridge.renderPendingDirty()) {
-                rh?.postDelayed({ doRender() }, 8L)
+                rh?.postDelayed({ doRender() }, 4L)
             } else if (liquifyPresentation.isPending(liquifyPresentationGesture)) {
                 displayBitmap?.let { liquifyPresentation.publish(liquifyPresentationGesture, it) }
                 com.reverie.paint.ui.painting.canvas.CanvasTouchView.activeTouchView?.invalidateFromRender()
@@ -4344,6 +4870,7 @@ class PaintViewModel : ViewModel() {
                     depth = ReverieCoreBridge.layerDepth(i),
                     colorLabel = ReverieCoreBridge.layerColorLabel(i),
                     clipped = ReverieCoreBridge.layerClipped(i),
+                    alphaInherited = ReverieCoreBridge.layerAlphaInherited(i),
                     isBackground = ReverieCoreBridge.layerBackground(i),
                     soloed = ReverieCoreBridge.layerSoloed(i),
                     opacity = ReverieCoreBridge.layerOpacity(i),
@@ -4520,6 +5047,7 @@ data class BrushParams(
     val textureScale: Double = 1.0,
     val textureStrength: Double = 0.5,
     val textureMode: String = "multiply",
+    val texturePattern: String = "",
     val hueJitter: Double = 0.0,
     val satJitter: Double = 0.0,
     val valJitter: Double = 0.0,
@@ -4539,6 +5067,8 @@ data class BrushParams(
     val airbrushRate: Double = 30.0,
     val smudgeRate: Double = 0.5,
     val smudgeLength: Double = 0.5,
+    val colorRate: Double = 0.5,
+    val smudgeMode: Int = 0,
     val spikes: Int = 2,
     val jitterAngle: Double = 0.0,
     val jitterSize: Double = 0.0,

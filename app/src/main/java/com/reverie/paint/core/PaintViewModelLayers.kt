@@ -386,10 +386,11 @@ internal fun PaintViewModel.removeLayer(index: Int) {
 
 internal fun PaintViewModel.setCurrentLayer(i: Int) {
     Breadcrumbs.record("Layer", "Set current layer: $i")
+    currentLayerIndex = i
     if (recorder.recording) {
         recorder.layerOp(com.reverie.paint.model.RecordingEvents.L_SET_CURRENT, i)
     }
-    runCore(after = ::notifyLayerChanged) {
+    runCore(after = { notifyLayerChanged(forceThumbs = false) }) {
         ReverieCoreBridge.setCurrentLayer(i)
     }
 }
@@ -598,6 +599,20 @@ internal fun PaintViewModel.setLayerClipped(
     }
     runCore(after = ::notifyLayerChanged) {
         ReverieCoreBridge.setLayerClipped(i, clipped)
+    }
+}
+
+internal fun PaintViewModel.layerAlphaInherited(i: Int) = ReverieCoreBridge.layerAlphaInherited(i)
+
+internal fun PaintViewModel.setLayerAlphaInherited(
+    i: Int,
+    enable: Boolean,
+) {
+    if (recorder.recording) {
+        recorder.layerOp(com.reverie.paint.model.RecordingEvents.L_ALPHA_INHERITED, i, if (enable) "1" else "0")
+    }
+    runCore(after = ::notifyLayerChanged) {
+        ReverieCoreBridge.setLayerAlphaInherited(i, enable)
     }
 }
 

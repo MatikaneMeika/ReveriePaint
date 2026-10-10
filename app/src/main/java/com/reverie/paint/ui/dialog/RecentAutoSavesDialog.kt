@@ -26,8 +26,12 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -40,6 +44,8 @@ import com.reverie.paint.core.AutoSaveHistoryManager
 import com.reverie.paint.core.PaintViewModel
 import com.reverie.paint.core.restoreAutoSaveSnapshot
 import com.reverie.paint.model.AutoSaveSnapshot
+import com.reverie.paint.ui.components.ReDropdownMenu
+import com.reverie.paint.ui.components.ReDropdownMenuItem
 import com.reverie.paint.ui.components.ReTextButton
 import com.reverie.paint.ui.theme.Theme
 import java.io.File
@@ -56,6 +62,12 @@ fun RecentAutoSavesDialog(
     val context = LocalContext.current
     var snapshots by remember { mutableStateOf(AutoSaveHistoryManager.getSnapshots(context)) }
     var pendingRestoreSnapshot by remember { mutableStateOf<AutoSaveSnapshot?>(null) }
+    var showClearConfirm by remember { mutableStateOf(false) }
+
+    val totalBytes = remember(snapshots) { snapshots.sumOf { it.fileSize } }
+    val totalMbStr = remember(totalBytes) {
+        String.format(Locale.getDefault(), "%.1f", totalBytes / (1024.0 * 1024.0))
+    }
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -80,7 +92,10 @@ fun RecentAutoSavesDialog(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        modifier = Modifier.weight(1f, fill = false),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
                         Box(
                             modifier = Modifier
                                 .size(40.dp)
@@ -104,28 +119,104 @@ fun RecentAutoSavesDialog(
                                 fontWeight = FontWeight.Bold,
                             )
                             Text(
-                                text = stringResource(R.string.settings_auto_save_history_sub),
+                                text = if (snapshots.isEmpty()) {
+                                    stringResource(R.string.settings_auto_save_history_sub)
+                                } else {
+                                    stringResource(R.string.auto_save_history_stats_with_limit, snapshots.size, vm.autoSaveMaxSnapshots, totalMbStr)
+                                },
                                 color = colors.subText,
                                 fontSize = 12.sp,
                             )
                         }
                     }
 
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (snapshots.isNotEmpty()) {
-                            Text(
-                                text = stringResource(R.string.auto_save_clear_all),
-                                color = colors.subText,
-                                fontSize = 13.sp,
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        // 容量设置下拉
+                        var showCapacityMenu by remember { mutableStateOf(false) }
+                        Box {
+                            Row(
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(8.dp))
-                                    .clickable {
-                                        AutoSaveHistoryManager.clearSnapshots(context)
-                                        snapshots = emptyList()
-                                    }
+                                    .background(colors.panelHi)
+                                    .clickable { showCapacityMenu = true }
                                     .padding(horizontal = 10.dp, vertical = 6.dp),
-                            )
-                            Spacer(Modifier.width(8.dp))
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.auto_save_capacity_pill, vm.autoSaveMaxSnapshots),
+                                    color = colors.accent,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                                Spacer(Modifier.width(4.dp))
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_chevron),
+                                    contentDescription = null,
+                                    tint = colors.accent,
+                                    modifier = Modifier
+                                        .size(11.dp)
+                                        .rotate(90f),
+                                )
+                            }
+                            ReDropdownMenu(
+                                expanded = showCapacityMenu,
+                                onDismissRequest = { showCapacityMenu = false },
+                            ) {
+                                listOf(3, 5, 8, 12, 16, 24).forEach { count ->
+                                    val isSelected = count == vm.autoSaveMaxSnapshots
+                                    ReDropdownMenuItem(
+                                        text = if (count == 8) {
+                                            stringResource(R.string.settings_snapshot_count_default, count)
+                                        } else {
+                                            stringResource(R.string.settings_snapshot_count_unit, count)
+                                        },
+                                        selected = isSelected,
+                                        trailingIcon = if (isSelected) {
+                                            {
+                                                Icon(
+                                                    painter = painterResource(R.drawable.ic_check),
+                                                    contentDescription = null,
+                                                    tint = colors.accent,
+                                                    modifier = Modifier.size(16.dp),
+                                                )
+                                            }
+                                        } else null,
+                                        onClick = {
+                                            vm.updateAutoSaveMaxSnapshots(count)
+                                            snapshots = AutoSaveHistoryManager.getSnapshots(context)
+                                            showCapacityMenu = false
+                                        },
+                                    )
+                                }
+                            }
+                        }
+
+                        if (snapshots.isNotEmpty()) {
+                            Row(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(colors.panelHi)
+                                    .clickable { showClearConfirm = true }
+                                    .padding(horizontal = 9.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.DeleteOutline,
+                                    contentDescription = null,
+                                    tint = colors.subText,
+                                    modifier = Modifier.size(14.dp),
+                                )
+                                Spacer(Modifier.width(3.dp))
+                                Text(
+                                    text = stringResource(R.string.auto_save_clear_all),
+                                    color = colors.subText,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Medium,
+                                )
+                            }
                         }
                         Box(
                             modifier = Modifier
@@ -145,7 +236,7 @@ fun RecentAutoSavesDialog(
                     }
                 }
 
-                Spacer(Modifier.height(16.dp))
+                Spacer(Modifier.height(14.dp))
 
                 // 快照列表
                 if (snapshots.isEmpty()) {
@@ -196,6 +287,64 @@ fun RecentAutoSavesDialog(
                                 },
                             )
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    // 清空全部二次确认对话框
+    if (showClearConfirm) {
+        Dialog(
+            onDismissRequest = { showClearConfirm = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false),
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(0.85f)
+                    .widthIn(max = 400.dp)
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(colors.panel)
+                    .border(1.dp, colors.panelHi, RoundedCornerShape(20.dp))
+                    .padding(20.dp),
+            ) {
+                Column {
+                    Text(
+                        text = stringResource(R.string.auto_save_clear_confirm_title),
+                        color = colors.text,
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        text = stringResource(R.string.auto_save_clear_confirm_desc),
+                        color = colors.subText,
+                        fontSize = 13.sp,
+                        lineHeight = 18.sp,
+                    )
+                    Spacer(Modifier.height(18.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        ReTextButton(
+                            text = stringResource(R.string.common_cancel),
+                            onClick = { showClearConfirm = false },
+                            primary = false,
+                            textColor = colors.subText,
+                            modifier = Modifier.weight(1f),
+                        )
+                        ReTextButton(
+                            text = stringResource(R.string.auto_save_clear_all),
+                            onClick = {
+                                AutoSaveHistoryManager.clearSnapshots(context)
+                                snapshots = emptyList()
+                                showClearConfirm = false
+                            },
+                            primary = true,
+                            containerColor = Color(0xFFC86464),
+                            modifier = Modifier.weight(1f),
+                        )
                     }
                 }
             }
@@ -269,6 +418,7 @@ private fun SnapshotCard(
                 Image(
                     bitmap = thumbBitmap.asImageBitmap(),
                     contentDescription = null,
+                    contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize(),
                 )
             } else {
@@ -287,14 +437,33 @@ private fun SnapshotCard(
         Column(
             modifier = Modifier.weight(1f),
         ) {
-            Text(
-                text = snapshot.displayName,
-                color = colors.text,
-                fontSize = 15.sp,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = snapshot.displayName,
+                    color = colors.text,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                if (snapshot.isEmergency) {
+                    Spacer(Modifier.width(6.dp))
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(colors.accent.copy(alpha = 0.2f))
+                            .padding(horizontal = 6.dp, vertical = 2.dp),
+                    ) {
+                        Text(
+                            text = stringResource(R.string.auto_save_badge_emergency),
+                            color = colors.accent,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                }
+            }
             Spacer(Modifier.height(3.dp))
             Text(
                 text = formattedTime,
@@ -303,7 +472,7 @@ private fun SnapshotCard(
             )
             Spacer(Modifier.height(3.dp))
             Text(
-                text = "${snapshot.strokeCount} 笔画 · ${snapshot.layerCount} 图层 · $sizeText",
+                text = stringResource(R.string.auto_save_snapshot_meta, snapshot.strokeCount, snapshot.layerCount, sizeText),
                 color = colors.subText.copy(alpha = 0.8f),
                 fontSize = 11.sp,
             )
@@ -318,14 +487,14 @@ private fun SnapshotCard(
                     .clip(RoundedCornerShape(10.dp))
                     .background(colors.accent.copy(alpha = 0.15f))
                     .clickable { onRestore() }
-                    .padding(horizontal = 12.dp, vertical = 7.dp),
+                    .padding(horizontal = 14.dp, vertical = 8.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
                     text = stringResource(R.string.auto_save_restore_action),
                     color = colors.accent,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium,
+                    fontSize = 12.5.sp,
+                    fontWeight = FontWeight.SemiBold,
                 )
             }
 
@@ -343,7 +512,7 @@ private fun SnapshotCard(
                     imageVector = Icons.Rounded.DeleteOutline,
                     contentDescription = "Delete",
                     tint = colors.subText,
-                    modifier = Modifier.size(18.dp),
+                    modifier = Modifier.size(17.dp),
                 )
             }
         }
@@ -403,7 +572,7 @@ private fun RestoreConfirmDialog(
                     text = if (hasUnsavedChanges) {
                         stringResource(R.string.auto_save_restore_confirm_msg)
                     } else {
-                        "即将恢复「${snapshot.displayName}」的自动保存快照，请选择恢复方式："
+                        stringResource(R.string.auto_save_restore_confirm_msg_clean, snapshot.displayName)
                     },
                     color = colors.subText,
                     fontSize = 14.sp,
@@ -434,7 +603,7 @@ private fun RestoreConfirmDialog(
 
                     // 取消
                     ReTextButton(
-                        text = "取消",
+                        text = stringResource(R.string.cancel),
                         onClick = onDismiss,
                         primary = false,
                         modifier = Modifier.fillMaxWidth(),

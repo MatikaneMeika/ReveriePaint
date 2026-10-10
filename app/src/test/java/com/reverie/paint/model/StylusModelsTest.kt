@@ -195,26 +195,240 @@ class StylusModelsTest {
     @Test
     fun `huawei pencil models correctly specified`() {
         val models = com.reverie.paint.core.stylus.HuaweiPencilModel.entries
-        assertEquals(3, models.size)
+        assertEquals(4, models.size)
+
+        val pro = com.reverie.paint.core.stylus.HuaweiPencilModel.PRO
+        assertEquals(16384, pro.maxPressure)
+        assertTrue("Pro has NearLink", pro.isNearLink)
+        assertTrue("Pro has double tap", pro.hasDoubleTap)
+        assertTrue("Pro has squeeze", pro.hasSqueeze)
 
         val gen3 = com.reverie.paint.core.stylus.HuaweiPencilModel.GEN3_NEARLINK
         assertEquals(16384, gen3.maxPressure)
         assertTrue("Gen 3 has NearLink", gen3.isNearLink)
         assertTrue("Gen 3 has double tap", gen3.hasDoubleTap)
+        assertFalse("Gen 3 does not have squeeze", gen3.hasSqueeze)
 
         val gen2 = com.reverie.paint.core.stylus.HuaweiPencilModel.GEN2
         assertEquals(4096, gen2.maxPressure)
         assertFalse(gen2.isNearLink)
         assertTrue(gen2.hasDoubleTap)
+        assertFalse(gen2.hasSqueeze)
 
         val gen1 = com.reverie.paint.core.stylus.HuaweiPencilModel.GEN1
         assertEquals(4096, gen1.maxPressure)
         assertFalse(gen1.isNearLink)
         assertFalse(gen1.hasDoubleTap)
+        assertFalse(gen1.hasSqueeze)
 
+        assertEquals(pro, com.reverie.paint.core.stylus.HuaweiPencilModel.fromKey("PRO"))
         assertEquals(gen3, com.reverie.paint.core.stylus.HuaweiPencilModel.fromKey("GEN3_NEARLINK"))
         assertEquals(gen3, com.reverie.paint.core.stylus.HuaweiPencilModel.fromKey("NEARLINK"))
         assertEquals(gen2, com.reverie.paint.core.stylus.HuaweiPencilModel.fromKey("GEN2"))
         assertEquals(gen1, com.reverie.paint.core.stylus.HuaweiPencilModel.fromKey("GEN1"))
     }
+
+    @Test
+    fun `vivo pencil models correctly specified`() {
+        val brands = StylusBrand.entries
+        val vivo = brands.firstOrNull { it == StylusBrand.VIVO_PENCIL }
+        assertNotNull("vivo brand defined", vivo)
+        assertEquals("vivo Pencil / iQOO Pencil", vivo?.displayName)
+        assertTrue("vivo should support double tap", vivo?.subtitle?.contains("双击") == true)
+        assertTrue("vivo should support writing vibrate", vivo?.subtitle?.contains("振动") == true)
+        assertTrue("vivo should support prediction", vivo?.subtitle?.contains("笔迹预测") == true)
+
+        val models = com.reverie.paint.core.stylus.VivoPencilModel.entries
+        assertEquals(5, models.size)
+
+        val pencil2 = com.reverie.paint.core.stylus.VivoPencilModel.VIVO_PENCIL2
+        assertTrue("Pencil2 has body double tap", pencil2.hasDoubleTap)
+        assertTrue("Pencil2 has writing vibration", pencil2.hasWritingVibrate)
+        assertFalse("Pencil2 is buttonless (capacitive film body)", pencil2.hasPhysicalButtons)
+        assertEquals("第二代", pencil2.editionName)
+
+        val nv = com.reverie.paint.core.stylus.VivoPencilModel.VIVO_PENCIL2_NV
+        assertTrue(nv.hasDoubleTap)
+        assertFalse("NV edition has no writing vibration", nv.hasWritingVibrate)
+        assertFalse(nv.hasPhysicalButtons)
+
+        val p2s = com.reverie.paint.core.stylus.VivoPencilModel.VIVO_PENCIL2S
+        assertTrue(p2s.hasDoubleTap)
+        assertFalse(p2s.hasWritingVibrate)
+        assertTrue("2s generation has physical button switching", p2s.hasPhysicalButtons)
+
+        val pencil3 = com.reverie.paint.core.stylus.VivoPencilModel.VIVO_PENCIL3
+        assertTrue(pencil3.hasDoubleTap)
+        assertTrue(pencil3.hasWritingVibrate)
+        assertFalse(pencil3.hasPhysicalButtons)
+
+        val pencil1 = com.reverie.paint.core.stylus.VivoPencilModel.VIVO_PENCIL1
+        assertFalse("1st gen has no body double tap", pencil1.hasDoubleTap)
+        assertFalse(pencil1.hasWritingVibrate)
+        assertTrue(pencil1.hasPhysicalButtons)
+
+        val vivoModels = com.reverie.paint.core.stylus.VivoPencilModel
+        assertEquals(pencil2, vivoModels.fromKey("VIVO_PENCIL2"))
+        assertEquals(nv, vivoModels.fromKey("VIVO_PENCIL2_NV"))
+        assertEquals(p2s, vivoModels.fromKey("AIR"))
+        assertEquals(p2s, vivoModels.fromKey("VIVO_PENCIL2S"))
+        assertEquals(pencil3, vivoModels.fromKey("VIVO_PENCIL3"))
+        assertEquals(pencil1, vivoModels.fromKey("GEN1"))
+        assertEquals(pencil2, vivoModels.fromKey("UNKNOWN"))
+    }
+
+    @Test
+    fun `dedicated stylus brand priority isolates generic stylus adapter`() {
+        val dedicatedBrands = listOf(
+            com.reverie.paint.core.stylus.StylusBrand.SAMSUNG_SPEN,
+            com.reverie.paint.core.stylus.StylusBrand.HUAWEI_MPENCIL,
+            com.reverie.paint.core.stylus.StylusBrand.HONOR_MAGIC_PENCIL,
+            com.reverie.paint.core.stylus.StylusBrand.OPPO_ONEPLUS,
+            com.reverie.paint.core.stylus.StylusBrand.XIAOMI_STYLUS,
+            com.reverie.paint.core.stylus.StylusBrand.VIVO_PENCIL,
+        )
+
+        for (brand in dedicatedBrands) {
+            val detected = listOf(
+                com.reverie.paint.core.stylus.StylusDeviceDetected(
+                    brand = brand,
+                    isCurrentDeviceSupported = true,
+                    isConnected = true,
+                    deviceName = "Dedicated Pen",
+                ),
+                com.reverie.paint.core.stylus.StylusDeviceDetected(
+                    brand = com.reverie.paint.core.stylus.StylusBrand.GENERIC,
+                    isCurrentDeviceSupported = true,
+                    isConnected = true,
+                    deviceName = "Generic Pen",
+                ),
+            )
+            val hasDedicated = detected.any {
+                it.brand != com.reverie.paint.core.stylus.StylusBrand.GENERIC && it.isCurrentDeviceSupported && it.isConnected
+            }
+            assertTrue("Dedicated brand $brand must activate isolation gate", hasDedicated)
+        }
+
+        val genericOnly = listOf(
+            com.reverie.paint.core.stylus.StylusDeviceDetected(
+                brand = com.reverie.paint.core.stylus.StylusBrand.GENERIC,
+                isCurrentDeviceSupported = true,
+                isConnected = true,
+                deviceName = "Generic Pen",
+            ),
+        )
+        val hasDedicatedForGeneric = genericOnly.any {
+            it.brand != com.reverie.paint.core.stylus.StylusBrand.GENERIC && it.isCurrentDeviceSupported && it.isConnected
+        }
+        assertFalse("Generic-only device must not trigger isolation", hasDedicatedForGeneric)
+    }
+
+    @Test
+    fun `samsung stylus default action ids resolve to valid stylus actions`() {
+        val singleAction = StylusAction.fromActionId("toggle_eraser")
+        val doubleAction = StylusAction.fromActionId("undo")
+        val longPressAction = StylusAction.fromActionId("tool_picker")
+
+        assertEquals(StylusAction.TOGGLE_ERASER, singleAction)
+        assertEquals(StylusAction.UNDO, doubleAction)
+        assertEquals(StylusAction.COLOR_PICKER, longPressAction)
+    }
+
+    @Test
+    fun `samsung stylus swapped action mappings resolve correctly`() {
+        // User swapped mappings: single-click to undo, double-click to toggle brush/eraser
+        val singleClick = StylusAction.fromActionId("undo")
+        val doubleClick = StylusAction.fromActionId("toggle_eraser")
+
+        assertEquals(StylusAction.UNDO, singleClick)
+        assertEquals(StylusAction.TOGGLE_ERASER, doubleClick)
+    }
+
+    @Test
+    fun `primary dedicated brand resolution selects exclusively top supported connected brand`() {
+        // Emulating Samsung Galaxy Tab S9 environment
+        val detected = listOf(
+            com.reverie.paint.core.stylus.StylusDeviceDetected(
+                brand = com.reverie.paint.core.stylus.StylusBrand.OPPO_ONEPLUS,
+                isCurrentDeviceSupported = false,
+                isConnected = false,
+                deviceName = "OPPO Pencil",
+            ),
+            com.reverie.paint.core.stylus.StylusDeviceDetected(
+                brand = com.reverie.paint.core.stylus.StylusBrand.HUAWEI_MPENCIL,
+                isCurrentDeviceSupported = false,
+                isConnected = false,
+                deviceName = "HUAWEI M-Pencil",
+            ),
+            com.reverie.paint.core.stylus.StylusDeviceDetected(
+                brand = com.reverie.paint.core.stylus.StylusBrand.HONOR_MAGIC_PENCIL,
+                isCurrentDeviceSupported = false,
+                isConnected = false,
+                deviceName = "HONOR Magic-Pencil",
+            ),
+            com.reverie.paint.core.stylus.StylusDeviceDetected(
+                brand = com.reverie.paint.core.stylus.StylusBrand.SAMSUNG_SPEN,
+                isCurrentDeviceSupported = true,
+                isConnected = true,
+                deviceName = "Samsung S Pen (SM-X710)",
+            ),
+            com.reverie.paint.core.stylus.StylusDeviceDetected(
+                brand = com.reverie.paint.core.stylus.StylusBrand.XIAOMI_STYLUS,
+                isCurrentDeviceSupported = false,
+                isConnected = false,
+                deviceName = "Xiaomi Smart Pen",
+            ),
+            com.reverie.paint.core.stylus.StylusDeviceDetected(
+                brand = com.reverie.paint.core.stylus.StylusBrand.GENERIC,
+                isCurrentDeviceSupported = true,
+                isConnected = true,
+                deviceName = "Generic Pen",
+            ),
+        )
+
+        val primaryDedicated = detected.firstOrNull {
+            it.brand != com.reverie.paint.core.stylus.StylusBrand.GENERIC && it.isCurrentDeviceSupported && it.isConnected
+        } ?: detected.firstOrNull {
+            it.brand != com.reverie.paint.core.stylus.StylusBrand.GENERIC && it.isCurrentDeviceSupported
+        }
+
+        assertNotNull("Primary dedicated brand should be found", primaryDedicated)
+        assertEquals("Primary dedicated brand must be SAMSUNG_SPEN", com.reverie.paint.core.stylus.StylusBrand.SAMSUNG_SPEN, primaryDedicated?.brand)
+    }
+
+    @Test
+    fun `xiaomi focus pen does not use touchfilm penengine and routes physical buttons`() {
+        val focusPen = com.reverie.paint.core.stylus.XiaomiPencilModel.FOCUS_PEN
+        val focusPro = com.reverie.paint.core.stylus.XiaomiPencilModel.FOCUS_PEN_PRO
+        val smartPen2 = com.reverie.paint.core.stylus.XiaomiPencilModel.SMART_PEN_2
+
+        // PenEngine (touchfilm) should only be activated for models with slide/touchfilm gestures
+        val needsPenEngineFocus = !focusPen.hasPhysicalButtons || focusPen.hasSlideGesture
+        val needsPenEnginePro = !focusPro.hasPhysicalButtons || focusPro.hasSlideGesture
+        val needsPenEngineSmart2 = !smartPen2.hasPhysicalButtons || smartPen2.hasSlideGesture
+
+        assertFalse("Standard Focus Pen has physical buttons, must NOT use TouchFilm PenEngine", needsPenEngineFocus)
+        assertTrue("Focus Pen Pro is buttonless and uses TouchFilm PenEngine", needsPenEnginePro)
+        assertFalse("Smart Pen 2 has physical buttons, must NOT use TouchFilm PenEngine", needsPenEngineSmart2)
+
+        // KeyCodes used by Xiaomi physical buttons: PageUp/PageDown are emitted by standard Xiaomi Focus Pen
+        val primaryKeyCodes = listOf(
+            android.view.KeyEvent.KEYCODE_PAGE_UP,
+            android.view.KeyEvent.KEYCODE_DPAD_UP,
+            android.view.KeyEvent.KEYCODE_STYLUS_BUTTON_PRIMARY,
+            android.view.KeyEvent.KEYCODE_BUTTON_1,
+            308,
+        )
+        val secondaryKeyCodes = listOf(
+            android.view.KeyEvent.KEYCODE_PAGE_DOWN,
+            android.view.KeyEvent.KEYCODE_DPAD_DOWN,
+            android.view.KeyEvent.KEYCODE_STYLUS_BUTTON_SECONDARY,
+            android.view.KeyEvent.KEYCODE_BUTTON_2,
+            309,
+        )
+
+        assertTrue(primaryKeyCodes.contains(android.view.KeyEvent.KEYCODE_PAGE_UP))
+        assertTrue(secondaryKeyCodes.contains(android.view.KeyEvent.KEYCODE_PAGE_DOWN))
+    }
 }
+

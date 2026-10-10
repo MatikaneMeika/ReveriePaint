@@ -68,8 +68,7 @@ val ALL_SHORTCUT_DEFINITIONS = listOf(
     ShortcutDefinition("tool_fill", ShortcutCategory.TOOLS, "填充工具", "G", R.string.shortcut_def_fill),
     ShortcutDefinition("tool_gradient", ShortcutCategory.TOOLS, "渐变工具", "LeftShift + G", R.string.shortcut_def_gradient),
     ShortcutDefinition("tool_crop", ShortcutCategory.TOOLS, "裁剪工具", "C", R.string.shortcut_def_crop),
-    ShortcutDefinition("tool_transform", ShortcutCategory.TOOLS, "变换工具", "LeftCtrl + T", R.string.shortcut_def_transform),
-    ShortcutDefinition("tool_move", ShortcutCategory.TOOLS, "移动工具", "V", R.string.shortcut_def_move),
+    ShortcutDefinition("tool_transform", ShortcutCategory.TOOLS, "变换工具", "V", R.string.shortcut_def_transform),
 
     // 滤镜 (Filters)
     ShortcutDefinition("filter_hsv", ShortcutCategory.FILTERS, "色相/饱和度/明度", "LeftCtrl + U", R.string.shortcut_def_filter_hsv),
@@ -520,7 +519,7 @@ internal fun PaintViewModel.handleKeyEvent(event: KeyEvent): Boolean {
         "LeftCtrl + D" -> { clearSelectionAction(); true }
         "LeftCtrl + J" -> { copyLayer(currentLayerIndex); true }
         "LeftCtrl + E" -> { mergeDown(currentLayerIndex); true }
-        "LeftCtrl + T" -> { applyTool("transform"); true }
+        "LeftCtrl + T", "V" -> { applyTool("transform"); true }
         "LeftCtrl + =", "LeftCtrl + +", "LeftCtrl + LeftShift + =", "LeftCtrl + LeftShift + +" -> { requestUiCommand("zoom_in"); true }
         "LeftCtrl + -", "LeftCtrl + NumPadSubtract" -> { requestUiCommand("zoom_out"); true }
         "LeftCtrl + 0", "LeftCtrl + NumPad0" -> { requestUiCommand("reset_view"); true }
@@ -552,12 +551,8 @@ internal fun PaintViewModel.handleKeyEvent(event: KeyEvent): Boolean {
         "L" -> { applyTool("lasso"); true }
         "W" -> { applyTool("magicwand"); true }
         "C" -> { applyTool("crop"); true }
-        "V" -> { applyTool("move"); true }
         "X" -> {
-            val c1 = brushColor
-            val c2 = brushSecondaryColor
-            updateBrushColor(c2)
-            updateBrushSecondaryColor(c1)
+            swapColors()
             true
         }
         // 与画布面板一致: 快捷键/指令走**视图翻转** (只镜像显示, 零开销);
@@ -638,8 +633,7 @@ internal fun PaintViewModel.executeShortcutAction(id: String) {
         "tool_lasso" -> applyTool("lasso")
         "tool_magicwand" -> applyTool("magicwand")
         "tool_crop" -> applyTool("crop")
-        "tool_transform" -> applyTool("transform")
-        "tool_move" -> applyTool("move")
+        "tool_transform", "tool_move" -> applyTool("transform")
         "brush_size_inc" -> {
             val maxL = effectiveBrushMaxSize
             val newSize = (brushSize * 1.25).coerceAtMost(maxL)
@@ -658,12 +652,7 @@ internal fun PaintViewModel.executeShortcutAction(id: String) {
             val newOp = (brushOpacity - 0.1).coerceAtLeast(0.01)
             updateBrushOpacity(newOp)
         }
-        "swap_colors" -> {
-            val c1 = brushColor
-            val c2 = brushSecondaryColor
-            updateBrushColor(c2)
-            updateBrushSecondaryColor(c1)
-        }
+        "swap_colors" -> swapColors()
         "undo" -> undo()
         "redo" -> redo()
         "save_document" -> saveProject(docName)
@@ -688,7 +677,9 @@ internal fun PaintViewModel.executeShortcutAction(id: String) {
             val t = lastToolId
             if (t != currentToolId) applyTool(t)
         }
-        "tool_color" -> requestUiCommand("open_color")
+        "tool_color" -> toggleQuickColor(atPointer = true)
+        "toggle_quick_color" -> toggleQuickColor(atPointer = true)
+        "toggle_quick_layer" -> toggleQuickLayer()
         "disable_touch" -> toggleCanvasTouchDisabled()
         // 打开滤镜页并预选对应分类 (color 含 HSV/曲线, blur 含高斯模糊,
         // enhance 含锐化); 具体滤镜项仍需用户点选

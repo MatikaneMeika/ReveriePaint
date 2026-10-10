@@ -149,6 +149,13 @@ fun QuickBrushWindow(
         if (isCollapsed) RoundedCornerShape(22.dp) else RoundedCornerShape(22.dp)
     }
 
+    DisposableEffect(Unit) {
+        onDispose {
+            vm.quickBrushWindowWidth = 0f
+            vm.quickBrushWindowHeight = 0f
+        }
+    }
+
     Box(
         modifier = modifier
             .offset {
@@ -176,6 +183,8 @@ fun QuickBrushWindow(
             modifier = Modifier
                 .onSizeChanged { size ->
                     windowSize = size
+                    vm.quickBrushWindowWidth = size.width.toFloat()
+                    vm.quickBrushWindowHeight = size.height.toFloat()
                     if (size.width > 0 && size.height > 0) {
                         val minX = marginPx
                         val maxX = (screenWidthPx - size.width - marginPx).coerceAtLeast(minX)
@@ -600,10 +609,9 @@ fun QuickBrushWindow(
                 if (currentToast != null) {
                     Box(
                         modifier = Modifier
-                            .shadow(8.dp, RoundedCornerShape(12.dp), spotColor = Color.Black.copy(alpha = 0.22f))
-                            .clip(RoundedCornerShape(12.dp))
+                            .shadow(8.dp, RoundedCornerShape(10.dp), spotColor = Color.Black.copy(alpha = 0.22f))
+                            .clip(RoundedCornerShape(10.dp))
                             .background(Morandi.panelHi.copy(alpha = 0.96f))
-                            .border(1.dp, Morandi.border.copy(alpha = 0.65f), RoundedCornerShape(12.dp))
                             .padding(horizontal = 10.dp, vertical = 5.dp),
                         contentAlignment = Alignment.Center,
                     ) {
@@ -664,10 +672,9 @@ private fun QuickBrushItem(
                 if (isSelected) Morandi.accent.copy(alpha = 0.24f)
                 else Morandi.panelHi.copy(alpha = 0.45f)
             )
-            .border(
-                width = if (isSelected) 1.5.dp else 0.5.dp,
-                color = if (isSelected) Morandi.accent else Morandi.border.copy(alpha = 0.35f),
-                shape = RoundedCornerShape(10.dp),
+            .then(
+                if (isSelected) Modifier.border(1.2.dp, Morandi.accent.copy(alpha = 0.8f), RoundedCornerShape(10.dp))
+                else Modifier
             )
             .combinedClickable(
                 interactionSource = interactionSource,

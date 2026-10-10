@@ -46,6 +46,7 @@ object RecordingEvents {
     // tweaks between strokes are captured without hooking every setter)
     const val CONTEXT = 0x10
     const val CONTEXT_EXT = 0x11 // follows a CONTEXT; extended brush params (softness/spacing/.../smudge/airbrush)
+    // v2's trailing customization byte uses RecordedBrushOverrides; legacy 0/1 remain valid.
     const val CONTEXT_FADE = 0x12 // follows a CONTEXT; f32 fade (渐隐), diff-based, additive new-type event
 
     // Layer structural operations (payload: op u8, index u16, arg string)
@@ -99,6 +100,8 @@ object RecordingEvents {
     const val L_CANVAS_FLIP_H = 36 // 画布整体翻转 (全部图层绕文档中心镜像)
     const val L_CANVAS_FLIP_V = 37
     const val L_FILL_LAYER = 38 // index=层号; 用当前前景色填充整层 (选区感知)
+    const val L_ALPHA_INHERITED = 39 // index=层号; arg="1"开启/"0"关闭
+
 
     // ---- Tool op codes (TOOL_OP; payload layout is op-specific) ----
     const val T_SHAPE = 0 // kind u8, x1..y2 f32, filled u8
@@ -142,6 +145,7 @@ object RecordingEvents {
     const val T_CANVAS_COPY = 43 // - (no payload, safe to skip in older tool dispatchers)
     const val T_CANVAS_CUT = 44 // -
     const val T_CANVAS_PASTE = 45 // -
+    const val T_PATTERN_FILL = 47 // PatternFillEvent, embedded PNG or reuse previous pattern
     const val T_LIQUIFY_PROFILE = 46 // professional u8, hardness f32
     const val T_PRESET_SELECT = 42 // native idx u16 (0xFFFF sentinel if <0), preset name str
     const val T_SELECT_ALL_CANVAS = 38 // - 全选整个画布 (T_SELECT_ALL 实为按图层 alpha 选区)

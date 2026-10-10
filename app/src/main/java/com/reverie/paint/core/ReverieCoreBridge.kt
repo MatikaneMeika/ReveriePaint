@@ -570,11 +570,27 @@ object ReverieCoreBridge {
         rotation: Double,
     )
 
+    external fun touchStrokeStartWithTime(
+        x: Double,
+        y: Double,
+        pressure: Double,
+        timeSeconds: Double,
+    )
+
     external fun touchStrokeMove(
         x: Double,
         y: Double,
         pressure: Double,
     )
+
+    external fun touchStrokeMoveWithTime(
+        x: Double,
+        y: Double,
+        pressure: Double,
+        timeSeconds: Double,
+    ): Boolean
+
+    external fun resetStrokeCounter()
 
     /** Batched stroke transport: [coords] holds [x,y,pressure] triplets,
      *  [count] is the triplet count. Drains every pending sample in one JNI
@@ -589,6 +605,36 @@ object ReverieCoreBridge {
     external fun touchStrokeEnd()
 
     external fun touchStrokeCancel()
+
+    external fun setBrushTexture(
+        enabled: Boolean,
+        scale: Double,
+        strength: Double,
+        mode: String,
+        patternName: String,
+    )
+
+    external fun scratchpadStart(width: Int, height: Int): Boolean
+    external fun scratchpadStrokeStart(
+        x: Double,
+        y: Double,
+        pressure: Double,
+        tiltX: Double = 0.0,
+        tiltY: Double = 0.0,
+        rotation: Double = 0.0,
+    ): Boolean
+    external fun scratchpadStrokeMove(
+        x: Double,
+        y: Double,
+        pressure: Double,
+        tiltX: Double = 0.0,
+        tiltY: Double = 0.0,
+        rotation: Double = 0.0,
+    ): Boolean
+    external fun scratchpadStrokeEnd()
+    external fun scratchpadClear()
+    external fun scratchpadRender(bitmap: Bitmap): Boolean
+    external fun scratchpadEnd()
 
     external fun renderToBuffer(
         bitmap: Bitmap,
@@ -910,6 +956,8 @@ object ReverieCoreBridge {
 
     external fun loadRevp(path: String): Boolean
 
+    external fun isLastLoadHealed(): Boolean
+
     external fun loadPsd(path: String): Boolean
 
     external fun saveKra(path: String): Boolean
@@ -1037,6 +1085,11 @@ object ReverieCoreBridge {
     external fun getAdjustmentLayerConfig(index: Int): String
     // 原生填充层换色 (KisGeneratorLayer + reverie-solid-color); 非填充层返回 false
     external fun setFillLayerColor(index: Int, colorArgb: Int): Boolean
+    external fun setFillLayerPattern(index: Int, png: ByteArray): Boolean
+    external fun floodFillPatternAt(
+        x: Int, y: Int, tolerance: Int, sampleMerged: Boolean, expand: Int, feather: Int,
+        closeGap: Int, opacity: Double, compositeOp: String, png: ByteArray,
+    ): Boolean
     external fun getFillLayerColor(index: Int): Int
 
     external fun layerDepth(index: Int): Int
@@ -1053,6 +1106,13 @@ object ReverieCoreBridge {
     external fun setLayerClipped(
         index: Int,
         clipped: Boolean,
+    )
+
+    external fun layerAlphaInherited(index: Int): Boolean
+
+    external fun setLayerAlphaInherited(
+        index: Int,
+        enable: Boolean,
     )
 
     external fun flipLayerHorizontal(index: Int)

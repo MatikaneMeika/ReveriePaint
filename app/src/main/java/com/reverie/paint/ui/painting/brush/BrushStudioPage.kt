@@ -2,38 +2,24 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-/*
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
-
 package com.reverie.paint.ui.painting.brush
 
-import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
-import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.horizontalScroll
-import com.reverie.paint.ui.painting.TextInputGuard
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
@@ -41,60 +27,32 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.rotate
-import androidx.compose.ui.draw.scale
-import androidx.compose.ui.draw.shadow
-import com.reverie.paint.ui.theme.glassBorder
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.*
-import androidx.compose.ui.graphics.drawscope.DrawScope
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.rotate
-import androidx.compose.ui.graphics.drawscope.scale
-import androidx.compose.ui.graphics.drawscope.withTransform
-import androidx.compose.ui.input.pointer.PointerIcon
-import androidx.compose.ui.input.pointer.pointerHoverIcon
-import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.IntOffset
-import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
-import com.reverie.paint.ui.components.ReTextButton
 import com.reverie.paint.R
 import com.reverie.paint.core.*
-import com.reverie.paint.ui.components.ReSlider
-import com.reverie.paint.ui.components.ReSwitch
+import com.reverie.paint.ui.components.ReDropdownMenu
+import com.reverie.paint.ui.components.ReDropdownMenuItem
 import com.reverie.paint.ui.components.ReIconButton
-import com.reverie.paint.ui.components.noRippleClickable
+import com.reverie.paint.ui.components.ReTextButton
+import com.reverie.paint.ui.painting.TextInputGuard
 import com.reverie.paint.ui.theme.Morandi
 import com.reverie.paint.ui.theme.systemHoverIcon
 import dev.chrisbanes.haze.HazeState
-import java.io.File
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
-import kotlin.math.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 enum class StudioTab(val titleRes: Int, val subtitle: String, val iconRes: Int) {
     TIP(R.string.brush_studio_tab_tip, "Tip & Shape", R.drawable.ic_pencil),
-    MASKING(R.string.brush_studio_tab_masking, "Masking Brush", R.drawable.ic_layers),
-    STROKE(R.string.brush_studio_tab_stroke, "Dynamics", R.drawable.ic_line),
+    DYNAMICS(R.string.brush_studio_tab_stroke, "Dynamics", R.drawable.ic_line),
     COLOR(R.string.brush_studio_tab_color, "Color & Smudge", R.drawable.ic_palette),
-    GEOMETRY(R.string.brush_studio_tab_geometry, "Geometry", R.drawable.ic_rotate_cw),
-    TEXTURE(R.string.brush_studio_tab_texture, "Texture", R.drawable.ic_grid),
-    PRESSURE(R.string.brush_studio_tab_pressure, "Pressure", R.drawable.ic_hand),
-    ENGINE(R.string.brush_studio_tab_engine, "Engine & Ops", R.drawable.ic_settings),
-    INFO(R.string.brush_studio_tab_info, "Properties", R.drawable.ic_info_circle),
+    TEXTURE(R.string.brush_studio_tab_texture, "Texture & Mask", R.drawable.ic_grid),
+    PRESET(R.string.brush_studio_tab_engine, "Preset & Engine", R.drawable.ic_settings),
 }
 
 @Composable
@@ -107,14 +65,26 @@ fun BrushStudioPage(
     BackHandler { onBack() }
 
     val context = LocalContext.current
+    val tipImportedToast = stringResource(R.string.brush_studio_toast_tip_imported)
+    val tipImportFailedToast = stringResource(R.string.brush_studio_toast_tip_import_failed)
+    val brushCreatedToast = stringResource(R.string.brush_studio_toast_created)
+    val brushDeletedToast = stringResource(R.string.brush_studio_toast_deleted)
+    val revertToast = stringResource(R.string.brush_studio_revert_toast)
     val preset = vm.brushPresets.firstOrNull { it.index == presetIndex }
     var selectedTab by remember { mutableStateOf(StudioTab.TIP) }
     var showMenu by remember { mutableStateOf(false) }
     var showNewBrushDialog by remember { mutableStateOf(false) }
     var showRenameDialog by remember { mutableStateOf(false) }
     var showDeleteConfirmDialog by remember { mutableStateOf(false) }
+    var showRevertConfirmDialog by remember { mutableStateOf(false) }
     var showTipPickerModal by remember { mutableStateOf(false) }
     var showMaskingTipPickerModal by remember { mutableStateOf(false) }
+    var showPatternPickerModal by remember { mutableStateOf(false) }
+
+    // 进入工作台时捕获初始参数快照
+    LaunchedEffect(presetIndex) {
+        vm.captureBrushStudioSnapshot()
+    }
 
     // SAF Import Launcher for brush preset (.kpp, .bundle, .gbr, .png)
     val importBrushLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -128,39 +98,48 @@ fun BrushStudioPage(
         if (uri != null) {
             val res = vm.importCustomBrushTip(uri)
             if (res != null) {
-                Toast.makeText(context, context.getString(R.string.brush_studio_toast_tip_imported), Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, tipImportedToast, Toast.LENGTH_SHORT).show()
             } else {
-                Toast.makeText(context, context.getString(R.string.brush_studio_toast_tip_import_failed), Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, tipImportFailedToast, Toast.LENGTH_SHORT).show()
             }
         }
     }
 
-    // Scratchpad interactive test strokes
-    val scratchStrokes = remember { mutableStateListOf<List<ScratchPoint>>() }
-    var currentScratchStroke by remember { mutableStateOf<List<ScratchPoint>>(emptyList()) }
-
-    var shapeInvert by remember { mutableStateOf(false) }
-    var shapeColorInvert by remember { mutableStateOf(false) }
-    var shapeRgbAffectsAlpha by remember { mutableStateOf(true) }
-
-    /**
-     * 笔尖库清单。**只列名字, 不解码位图**。
-     *
-     * 原实现在 `remember` 里遍历 filesDir/brushes + assets/brushes 并对每个文件
-     * 同步 readBytes + 逐像素解码, 而 remember 是在组合阶段跑主线程的: 打开工作台
-     * 要扫六百多个文件, 其中还有 19MB 的动画 .gih, 卡顿与内存峰值都来自这里。
-     * 解码改由网格项按可见范围异步触发 (见 TipThumb)。
-     */
     var allTipItems by remember { mutableStateOf<List<BrushTipItem>>(emptyList()) }
     LaunchedEffect(context) {
         allTipItems = withContext(Dispatchers.IO) { buildTipItems(context) }
     }
 
+    var allPatternItems by remember { mutableStateOf<List<PatternItem>>(emptyList()) }
+    LaunchedEffect(context) {
+        allPatternItems = withContext(Dispatchers.IO) { buildPatternItems(context) }
+    }
+
+    // SAF Import Launcher for Custom Texture Pattern (.pat, .png, .jpg)
+    val importPatternLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            val res = vm.importCustomPattern(uri)
+            if (res != null) {
+                allPatternItems = buildPatternItems(context)
+                Toast.makeText(context, context.getString(R.string.brush_studio_pattern_toast_imported, res), Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(context, context.getString(R.string.brush_studio_pattern_toast_failed), Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    // 手机端折叠状态
+    var scratchpadVisible by remember { mutableStateOf(true) }
+    var scratchpadExpanded by remember { mutableStateOf(false) }
+
+    var shapeInvert by remember { mutableStateOf(false) }
+    var shapeColorInvert by remember { mutableStateOf(false) }
+    var shapeRgbAffectsAlpha by remember { mutableStateOf(true) }
+
     val pageBg = Morandi.bg
     val panelBg = Morandi.panel
     val cardBg = Morandi.panelHi
     val borderCol = Morandi.border.copy(alpha = 0.2f)
-    val dividerCol = Morandi.border.copy(alpha = 0.2f)
     val textMain = Morandi.text
     val textSub = Morandi.subText
 
@@ -208,61 +187,82 @@ fun BrushStudioPage(
 
                 Spacer(Modifier.weight(1f))
 
-                // New Brush action
+                // 还原修改动作
+                val hasChanges = vm.hasBrushStudioChanges()
+                ReIconButton(
+                    R.drawable.ic_refresh,
+                    stringResource(R.string.brush_studio_revert_changes),
+                    onTap = {
+                        if (hasChanges) {
+                            showRevertConfirmDialog = true
+                        }
+                    },
+                    tint = if (hasChanges) Morandi.accent else textSub.copy(alpha = 0.45f),
+                    iconSize = 17.dp,
+                )
+
+                // 试画台折叠切换 (手机端有效)
+                ReIconButton(
+                    R.drawable.ic_pencil,
+                    stringResource(if (scratchpadVisible) R.string.scratchpad_collapse else R.string.scratchpad_expand),
+                    onTap = { scratchpadVisible = !scratchpadVisible },
+                    tint = if (scratchpadVisible) Morandi.accent else textSub,
+                    iconSize = 17.dp,
+                )
+
+                // 新建笔刷
                 ReIconButton(R.drawable.ic_plus, stringResource(R.string.brush_studio_new_brush), { showNewBrushDialog = true }, tint = textSub, iconSize = 17.dp)
 
-                // Duplicate action
+                // 复制笔刷
                 ReIconButton(R.drawable.ic_copy, stringResource(R.string.brush_studio_duplicate_brush), {
                     if (vm.brushPresets.any { it.index == presetIndex }) {
                         vm.duplicateBrushPreset(presetIndex)
                     }
                 }, tint = textSub, iconSize = 17.dp)
 
-                // Import action
+                // 导入笔刷
                 ReIconButton(R.drawable.ic_export_tab, stringResource(R.string.brush_studio_import_brush), { importBrushLauncher.launch(arrayOf("*/*")) }, tint = textSub, iconSize = 17.dp)
 
-                // Overflow Menu
+                // 溢出菜单
                 Box {
                     ReIconButton(R.drawable.ic_dots_vertical, stringResource(R.string.brush_studio_more_ops), { showMenu = true }, tint = textSub, iconSize = 17.dp)
 
-                    DropdownMenu(
+                    ReDropdownMenu(
                         expanded = showMenu,
                         onDismissRequest = { showMenu = false },
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(panelBg),
                     ) {
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.brush_studio_rename_brush), color = textMain, fontSize = 13.sp) },
+                        ReDropdownMenuItem(
+                            text = stringResource(R.string.brush_studio_rename_brush),
                             onClick = {
                                 showMenu = false
                                 showRenameDialog = true
                             },
                         )
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.brush_share_action), color = textMain, fontSize = 13.sp) },
+                        ReDropdownMenuItem(
+                            text = stringResource(R.string.brush_share_action),
                             onClick = {
                                 showMenu = false
                                 preset?.let { vm.shareBrushPreset(context, it.name) }
                             },
                         )
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.brush_export_group_action), color = textMain, fontSize = 13.sp) },
+                        ReDropdownMenuItem(
+                            text = stringResource(R.string.brush_export_group_action),
                             onClick = {
                                 showMenu = false
                                 preset?.group?.let { vm.exportBrushGroup(context, it) }
                             },
                         )
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.brush_studio_reset_params), color = textMain, fontSize = 13.sp) },
+                        ReDropdownMenuItem(
+                            text = stringResource(R.string.brush_studio_reset_params),
                             onClick = {
                                 showMenu = false
                                 vm.resetBrushParams()
                             },
                         )
                         if (preset?.isBuiltIn != true) {
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.brush_studio_delete_brush), color = Color(0xFFC86464), fontSize = 13.sp) },
+                            ReDropdownMenuItem(
+                                text = stringResource(R.string.brush_studio_delete_brush),
+                                isDestructive = true,
                                 onClick = {
                                     showMenu = false
                                     showDeleteConfirmDialog = true
@@ -275,290 +275,262 @@ fun BrushStudioPage(
 
             Box(Modifier.fillMaxWidth().height(0.6.dp).background(Morandi.border.copy(alpha = 0.08f)))
 
-            // ---- Master-Detail Split Workspace ----
-            Row(modifier = Modifier.fillMaxWidth().weight(1f)) {
-                // Left Navigation Rail (左侧功能导轨)
+            // ---- 参数面板卡片内容 ----
+            @Composable
+            fun ParameterCards(modifier: Modifier = Modifier) {
                 Column(
-                    modifier = Modifier
-                        .width(116.dp)
-                        .fillMaxHeight()
-                        .background(panelBg)
+                    modifier = modifier
                         .verticalScroll(rememberScrollState())
-                        .padding(vertical = 10.dp, horizontal = 6.dp),
-                    verticalArrangement = Arrangement.spacedBy(3.dp),
+                        .padding(horizontal = 14.dp, vertical = 8.dp),
                 ) {
-                    StudioTab.values().forEach { tab ->
-                        val sel = tab == selectedTab
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(if (sel) Morandi.accent.copy(alpha = 0.14f) else Color.Transparent)
-                                .clickable { selectedTab = tab }
-                                .padding(vertical = 9.dp, horizontal = 10.dp),
+                    AnimatedContent(
+                        targetState = selectedTab,
+                        transitionSpec = { fadeIn() togetherWith fadeOut() },
+                        label = "studioTabAnim",
+                    ) { tab ->
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(14.dp),
                         ) {
-                            Column(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalAlignment = Alignment.Start,
-                                verticalArrangement = Arrangement.spacedBy(2.dp),
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                ) {
-                                    Icon(
-                                        painterResource(tab.iconRes),
-                                        contentDescription = null,
-                                        tint = if (sel) Morandi.accent else textSub,
-                                        modifier = Modifier.size(15.dp),
-                                    )
-                                    Text(
-                                        stringResource(tab.titleRes),
-                                        color = if (sel) Morandi.accent else textMain,
-                                        fontSize = 12.sp,
-                                        fontWeight = if (sel) FontWeight.SemiBold else FontWeight.Normal,
-                                    )
-                                }
-                                Text(
-                                    tab.subtitle,
-                                    color = if (sel) Morandi.accent.copy(alpha = 0.7f) else textSub.copy(alpha = 0.6f),
-                                    fontSize = 9.sp,
-                                    maxLines = 1,
+                            when (tab) {
+                                StudioTab.TIP -> TipTabContent(
+                                    vm = vm,
+                                    preset = preset,
+                                    allTips = allTipItems,
+                                    shapeInvert = shapeInvert,
+                                    onShapeInvert = { shapeInvert = it },
+                                    shapeColorInvert = shapeColorInvert,
+                                    onShapeColorInvert = { shapeColorInvert = it },
+                                    shapeRgbAffectsAlpha = shapeRgbAffectsAlpha,
+                                    onShapeRgbAffectsAlpha = { shapeRgbAffectsAlpha = it },
+                                    onOpenTipPicker = { showTipPickerModal = true },
+                                    onImportCustomTip = { importTipLauncher.launch(arrayOf("*/*")) },
+                                    cardBg = cardBg,
+                                    borderCol = borderCol,
+                                    textMain = textMain,
+                                    textSub = textSub,
                                 )
-                            }
-                        }
-                    }
-                }
-
-                Box(modifier = Modifier.width(0.6.dp).fillMaxHeight().background(Morandi.border.copy(alpha = 0.08f)))
-
-                // Right Main Workspace (右侧工作区)
-                Column(modifier = Modifier.weight(1f).fillMaxHeight().background(pageBg)) {
-                    // Top Interactive Scratchpad (试画台)
-                    var scratchpadExpanded by remember { mutableStateOf(false) }
-                    var scratchpadSolidBg by remember { mutableStateOf(false) }
-                    val scratchpadHeight by androidx.compose.animation.core.animateDpAsState(
-                        targetValue = if (scratchpadExpanded) 210.dp else 126.dp,
-                        label = "scratchpadHeight"
-                    )
-
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(scratchpadHeight)
-                            .padding(horizontal = 10.dp, vertical = 8.dp)
-                            .clip(RoundedCornerShape(14.dp))
-                            .background(Morandi.panelHi.copy(alpha = 0.5f))
-                            .padding(4.dp)
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(if (scratchpadSolidBg) Morandi.panelHi else Morandi.panel),
-                    ) {
-                        if (!scratchpadSolidBg) {
-                            CheckerboardBackground(modifier = Modifier.fillMaxSize())
-                        }
-
-                        ScratchpadCanvas(
-                            vm = vm,
-                            strokes = scratchStrokes,
-                            currentStroke = currentScratchStroke,
-                            onStrokeStart = { p -> currentScratchStroke = listOf(p) },
-                            onStrokeAddPoints = { pts -> currentScratchStroke = currentScratchStroke + pts },
-                            onStrokeEnd = {
-                                if (currentScratchStroke.isNotEmpty()) {
-                                    scratchStrokes.add(currentScratchStroke)
-                                    currentScratchStroke = emptyList()
-                                }
-                            },
-                            modifier = Modifier.fillMaxSize(),
-                        )
-
-                        // Top Controls Overlay (Background switch, Expand toggle)
-                        Row(
-                            modifier = Modifier
-                                .align(Alignment.TopEnd)
-                                .padding(8.dp),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            // Background switcher
-                            Box(
-                                modifier = Modifier
-                                    .size(28.dp)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(Morandi.panel.copy(alpha = 0.85f))
-                                    .clickable { scratchpadSolidBg = !scratchpadSolidBg },
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Icon(
-                                    painterResource(if (scratchpadSolidBg) R.drawable.ic_layers else R.drawable.ic_circle),
-                                    contentDescription = stringResource(if (scratchpadSolidBg) R.string.scratchpad_bg_checker else R.string.scratchpad_bg_solid),
-                                    tint = textSub,
-                                    modifier = Modifier.size(14.dp),
+                                StudioTab.DYNAMICS -> DynamicsTabContent(
+                                    vm = vm,
+                                    cardBg = cardBg,
+                                    borderCol = borderCol,
+                                    textMain = textMain,
+                                    textSub = textSub,
                                 )
-                            }
-
-                            // Height expand toggle
-                            Box(
-                                modifier = Modifier
-                                    .size(28.dp)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(Morandi.panel.copy(alpha = 0.85f))
-                                    .clickable { scratchpadExpanded = !scratchpadExpanded },
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Icon(
-                                    painterResource(R.drawable.ic_chevron),
-                                    contentDescription = stringResource(if (scratchpadExpanded) R.string.scratchpad_collapse else R.string.scratchpad_expand),
-                                    tint = if (scratchpadExpanded) Morandi.accent else textSub,
-                                    modifier = Modifier
-                                        .size(15.dp)
-                                        .rotate(if (scratchpadExpanded) -90f else 90f),
+                                StudioTab.COLOR -> ColorTabContent(
+                                    vm = vm,
+                                    cardBg = cardBg,
+                                    borderCol = borderCol,
+                                    textMain = textMain,
+                                    textSub = textSub,
                                 )
-                            }
-                        }
-
-                        // Bottom Actions: Set Thumbnail & Clear button & Draw Hint
-                        Row(
-                            modifier = Modifier
-                                .align(Alignment.BottomStart)
-                                .padding(8.dp)
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(Morandi.panel.copy(alpha = 0.9f))
-                                .clickable {
-                                    val allStrokes = if (currentScratchStroke.isNotEmpty()) {
-                                        scratchStrokes + listOf(currentScratchStroke)
-                                    } else {
-                                        scratchStrokes.toList()
-                                    }
-                                    captureScratchpadAsThumbnail(context, vm, allStrokes)
-                                }
-                                .padding(horizontal = 10.dp, vertical = 5.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(5.dp),
-                        ) {
-                            Icon(painterResource(R.drawable.ic_pencil), contentDescription = null, tint = textSub, modifier = Modifier.size(13.dp))
-                            Text(stringResource(R.string.brush_studio_scratchpad_set_icon), color = textSub, fontSize = 11.sp)
-                        }
-
-                        if (scratchStrokes.isNotEmpty() || currentScratchStroke.isNotEmpty()) {
-                            Row(
-                                modifier = Modifier
-                                    .align(Alignment.BottomEnd)
-                                    .padding(8.dp)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(Morandi.panel.copy(alpha = 0.9f))
-                                    .clickable {
-                                        scratchStrokes.clear()
-                                        currentScratchStroke = emptyList()
-                                    }
-                                    .padding(horizontal = 10.dp, vertical = 5.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(5.dp),
-                            ) {
-                                Icon(painterResource(R.drawable.ic_trash), contentDescription = null, tint = textSub, modifier = Modifier.size(13.dp))
-                                Text(stringResource(R.string.brush_studio_scratchpad_clear), color = textSub, fontSize = 11.sp)
-                            }
-                        } else {
-                            Text(
-                                stringResource(R.string.brush_studio_scratchpad_hint),
-                                color = textSub.copy(alpha = 0.5f),
-                                fontSize = 11.sp,
-                                modifier = Modifier.align(Alignment.Center),
-                            )
-                        }
-                    }
-
-                    Box(Modifier.fillMaxWidth().height(0.6.dp).background(Morandi.border.copy(alpha = 0.08f)))
-
-                    // Parameter Cards Stack
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1f)
-                            .verticalScroll(rememberScrollState())
-                            .padding(horizontal = 14.dp, vertical = 10.dp),
-                    ) {
-                        AnimatedContent(
-                            targetState = selectedTab,
-                            transitionSpec = { fadeIn() togetherWith fadeOut() },
-                            label = "studioTabAnim",
-                        ) { tab ->
-                            Column(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalArrangement = Arrangement.spacedBy(14.dp),
-                            ) {
-                                when (tab) {
-                                    StudioTab.TIP -> TipTabContent(
-                                        vm = vm,
-                                        preset = preset,
-                                        allTips = allTipItems,
-                                        shapeInvert = shapeInvert,
-                                        onShapeInvert = { shapeInvert = it },
-                                        shapeColorInvert = shapeColorInvert,
-                                        onShapeColorInvert = { shapeColorInvert = it },
-                                        shapeRgbAffectsAlpha = shapeRgbAffectsAlpha,
-                                        onShapeRgbAffectsAlpha = { shapeRgbAffectsAlpha = it },
-                                        onOpenTipPicker = { showTipPickerModal = true },
-                                        onImportCustomTip = { importTipLauncher.launch(arrayOf("*/*")) },
-                                        cardBg = cardBg,
-                                        borderCol = borderCol,
-                                        textMain = textMain,
-                                        textSub = textSub,
-                                    )
-                                    StudioTab.MASKING -> MaskingTabContent(
-                                        vm = vm,
-                                        preset = preset,
-                                        allTips = allTipItems,
-                                        onOpenMaskingTipPicker = { showMaskingTipPickerModal = true },
-                                        cardBg = cardBg,
-                                        borderCol = borderCol,
-                                        textMain = textMain,
-                                        textSub = textSub,
-                                    )
-                                    StudioTab.STROKE -> StrokeTabContent(vm = vm, cardBg = cardBg, borderCol = borderCol, textMain = textMain, textSub = textSub)
-                                    StudioTab.COLOR -> ColorTabContent(vm = vm, cardBg = cardBg, borderCol = borderCol, textMain = textMain, textSub = textSub)
-                                    StudioTab.GEOMETRY -> GeometryTabContent(
-                                        vm = vm,
-                                        cardBg = cardBg,
-                                        borderCol = borderCol,
-                                        textMain = textMain,
-                                        textSub = textSub,
-                                    )
-                                    StudioTab.TEXTURE -> TextureTabContent(vm = vm, cardBg = cardBg, borderCol = borderCol, textMain = textMain, textSub = textSub)
-                                    StudioTab.PRESSURE -> PressureTabContent(vm = vm, cardBg = cardBg, borderCol = borderCol, textMain = textMain, textSub = textSub)
-                                    StudioTab.ENGINE -> EngineTabContent(
-                                        vm = vm,
-                                        presetIndex = presetIndex,
-                                        preset = preset,
-                                        cardBg = cardBg,
-                                        borderCol = borderCol,
-                                        textMain = textMain,
-                                        textSub = textSub,
-                                        onDuplicate = {
-                                            if (vm.brushPresets.any { it.index == presetIndex }) {
-                                                vm.duplicateBrushPreset(presetIndex)
-                                            }
-                                        },
-                                        onRename = { showRenameDialog = true },
-                                        onDelete = { showDeleteConfirmDialog = true },
-                                    )
-                                    StudioTab.INFO -> InfoTabContent(
-                                         vm = vm,
-                                         preset = preset,
-                                         cardBg = cardBg,
-                                         borderCol = borderCol,
-                                         textMain = textMain,
-                                         textSub = textSub,
-                                     )
-                                }
+                                StudioTab.TEXTURE -> TextureTabContent(
+                                    vm = vm,
+                                    preset = preset,
+                                    allTips = allTipItems,
+                                    allPatterns = allPatternItems,
+                                    onOpenPatternPicker = { showPatternPickerModal = true },
+                                    onOpenMaskingTipPicker = { showMaskingTipPickerModal = true },
+                                    cardBg = cardBg,
+                                    borderCol = borderCol,
+                                    textMain = textMain,
+                                    textSub = textSub,
+                                )
+                                StudioTab.PRESET -> PresetTabContent(
+                                    vm = vm,
+                                    presetIndex = presetIndex,
+                                    preset = preset,
+                                    cardBg = cardBg,
+                                    borderCol = borderCol,
+                                    textMain = textMain,
+                                    textSub = textSub,
+                                    onDuplicate = {
+                                        if (vm.brushPresets.any { it.index == presetIndex }) {
+                                            vm.duplicateBrushPreset(presetIndex)
+                                        }
+                                    },
+                                    onRename = { showRenameDialog = true },
+                                    onDelete = { showDeleteConfirmDialog = true },
+                                )
                             }
                         }
                     }
                 }
             }
+
+            // 折叠状态下的快速呼出栏
+            @Composable
+            fun CollapsedScratchpadBar() {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 10.dp, vertical = 4.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(cardBg.copy(alpha = 0.5f))
+                        .clickable { scratchpadVisible = true }
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Icon(painterResource(R.drawable.ic_pencil), contentDescription = null, tint = textSub, modifier = Modifier.size(13.dp))
+                        Text(stringResource(R.string.brush_studio_scratchpad_toggle), color = textSub, fontSize = 11.sp)
+                    }
+                    Text(stringResource(R.string.scratchpad_expand), color = Morandi.accent, fontSize = 11.sp)
+                }
+            }
+
+            // ---- 自适应工作区 (宽屏/平板左右分栏，窄屏/手机顶部Tab胶囊) ----
+            BoxWithConstraints(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                val isWideScreen = maxWidth >= 600.dp
+
+                if (isWideScreen) {
+                    // 宽屏模式：左侧参数区（约 55% 宽度，内含 Tab 导轨 + 参数卡片）+ 右侧全高试画板（约 45% 宽度）
+                    Row(modifier = Modifier.fillMaxSize()) {
+                        Row(modifier = Modifier.weight(1.15f).fillMaxHeight()) {
+                            // 116dp 导轨
+                            Column(
+                                modifier = Modifier
+                                    .width(116.dp)
+                                    .fillMaxHeight()
+                                    .background(panelBg)
+                                    .verticalScroll(rememberScrollState())
+                                    .padding(vertical = 10.dp, horizontal = 6.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                StudioTab.values().forEach { tab ->
+                                    val sel = tab == selectedTab
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .background(if (sel) Morandi.accent.copy(alpha = 0.16f) else Color.Transparent)
+                                            .clickable { selectedTab = tab }
+                                            .padding(vertical = 10.dp, horizontal = 10.dp),
+                                    ) {
+                                        Column(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalAlignment = Alignment.Start,
+                                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                                        ) {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                            ) {
+                                                Icon(
+                                                    painterResource(tab.iconRes),
+                                                    contentDescription = null,
+                                                    tint = if (sel) Morandi.accent else textSub,
+                                                    modifier = Modifier.size(16.dp),
+                                                )
+                                                Text(
+                                                    stringResource(tab.titleRes),
+                                                    color = if (sel) Morandi.accent else textMain,
+                                                    fontSize = 12.sp,
+                                                    fontWeight = if (sel) FontWeight.SemiBold else FontWeight.Normal,
+                                                )
+                                            }
+                                            Text(
+                                                tab.subtitle,
+                                                color = if (sel) Morandi.accent.copy(alpha = 0.7f) else textSub.copy(alpha = 0.6f),
+                                                fontSize = 9.sp,
+                                                maxLines = 1,
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            Box(modifier = Modifier.width(0.6.dp).fillMaxHeight().background(Morandi.border.copy(alpha = 0.15f)))
+
+                            ParameterCards(modifier = Modifier.weight(1f).fillMaxHeight().background(pageBg))
+                        }
+
+                        Box(modifier = Modifier.width(0.6.dp).fillMaxHeight().background(Morandi.border.copy(alpha = 0.15f)))
+
+                        // 右侧独立全高试画板
+                        BrushStudioScratchpadPanel(
+                            vm = vm,
+                            modifier = Modifier
+                                .weight(0.95f)
+                                .fillMaxHeight()
+                                .padding(8.dp),
+                            isCollapsible = false,
+                        )
+                    }
+                } else {
+                    // 窄屏/手机模式：顶部水平滚动 Tab 胶囊栏 + 折叠式试画卡片 + 参数区
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(panelBg)
+                                .horizontalScroll(rememberScrollState())
+                                .padding(horizontal = 8.dp, vertical = 6.dp),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            StudioTab.values().forEach { tab ->
+                                val sel = tab == selectedTab
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(if (sel) Morandi.accent.copy(alpha = 0.16f) else cardBg.copy(alpha = 0.5f))
+                                    .border(if (sel) 1.dp else 0.5.dp, if (sel) Morandi.accent.copy(alpha = 0.4f) else borderCol, RoundedCornerShape(8.dp))
+                                        .clickable { selectedTab = tab }
+                                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                                    ) {
+                                        Icon(
+                                            painterResource(tab.iconRes),
+                                            contentDescription = null,
+                                            tint = if (sel) Morandi.accent else textSub,
+                                            modifier = Modifier.size(13.dp),
+                                        )
+                                        Text(
+                                            stringResource(tab.titleRes),
+                                            color = if (sel) Morandi.accent else textMain,
+                                            fontSize = 11.sp,
+                                            fontWeight = if (sel) FontWeight.SemiBold else FontWeight.Normal,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        Box(Modifier.fillMaxWidth().height(0.6.dp).background(Morandi.border.copy(alpha = 0.08f)))
+
+                        if (scratchpadVisible) {
+                            val scratchpadHeight by animateDpAsState(
+                                targetValue = if (scratchpadExpanded) 220.dp else 140.dp,
+                                label = "phoneScratchpadH",
+                            )
+                            BrushStudioScratchpadPanel(
+                                vm = vm,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(scratchpadHeight)
+                                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                                isCollapsible = true,
+                                isExpanded = scratchpadExpanded,
+                                onToggleExpanded = { scratchpadExpanded = !scratchpadExpanded },
+                                onClose = { scratchpadVisible = false },
+                            )
+                        } else {
+                            CollapsedScratchpadBar()
+                        }
+
+                        Box(Modifier.fillMaxWidth().height(0.6.dp).background(Morandi.border.copy(alpha = 0.08f)))
+                        ParameterCards(modifier = Modifier.fillMaxWidth().weight(1f))
+                    }
+                }
+            }
         }
 
-        // Floating Modal: Brush Tip Library Picker (浮窗笔尖选择器)
+        // 浮窗笔尖选择器
         if (showTipPickerModal) {
             BrushTipPickerModal(
                 allTips = allTipItems,
@@ -597,14 +569,33 @@ fun BrushStudioPage(
             )
         }
 
-        // Dialogs
+        if (showPatternPickerModal) {
+            BrushPatternPickerModal(
+                allPatterns = allPatternItems,
+                currentPattern = vm.brushTexturePattern,
+                onSelectPattern = { pat ->
+                    vm.updateBrushTexturePattern(pat)
+                    showPatternPickerModal = false
+                },
+                onImportPattern = {
+                    importPatternLauncher.launch(arrayOf("*/*"))
+                },
+                onDismiss = { showPatternPickerModal = false },
+                cardBg = cardBg,
+                borderCol = borderCol,
+                textMain = textMain,
+                textSub = textSub,
+            )
+        }
+
+        // 对话框
         if (showNewBrushDialog) {
             StudioNewBrushDialog(
                 onDismiss = { showNewBrushDialog = false },
                 onCreate = { name, group ->
                     vm.createNewBrushPreset(name = name, group = group)
                     showNewBrushDialog = false
-                    Toast.makeText(context, context.getString(R.string.brush_studio_toast_created), Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, brushCreatedToast, Toast.LENGTH_SHORT).show()
                 },
                 cardBg = cardBg,
                 textMain = textMain,
@@ -629,6 +620,31 @@ fun BrushStudioPage(
             )
         }
 
+        // 还原修改确认弹窗
+        if (showRevertConfirmDialog) {
+            AlertDialog(
+                onDismissRequest = { showRevertConfirmDialog = false },
+                title = { Text(stringResource(R.string.brush_studio_revert_changes), color = textMain, fontSize = 15.sp) },
+                text = { Text(stringResource(R.string.brush_studio_revert_confirm), color = textSub, fontSize = 13.sp) },
+                confirmButton = {
+                    ReTextButton(
+                        stringResource(R.string.common_confirm),
+                        onClick = {
+                            vm.revertBrushStudioSnapshot()
+                            showRevertConfirmDialog = false
+                            Toast.makeText(context, revertToast, Toast.LENGTH_SHORT).show()
+                        },
+                        textColor = Morandi.accent,
+                        fontWeight = FontWeight.Bold,
+                    )
+                },
+                dismissButton = {
+                    ReTextButton(stringResource(R.string.common_cancel), { showRevertConfirmDialog = false }, textColor = textSub)
+                },
+                containerColor = cardBg,
+            )
+        }
+
         if (showDeleteConfirmDialog && preset != null) {
             AlertDialog(
                 onDismissRequest = { showDeleteConfirmDialog = false },
@@ -640,9 +656,9 @@ fun BrushStudioPage(
                         onClick = {
                             vm.deleteBrushPreset(presetIndex)
                             showDeleteConfirmDialog = false
-                            Toast.makeText(context, context.getString(R.string.brush_studio_toast_deleted), Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, brushDeletedToast, Toast.LENGTH_SHORT).show()
                         },
-                        textColor = Color(0xFFC86464),
+                        textColor = Morandi.error,
                     )
                 },
                 dismissButton = {

@@ -21,6 +21,13 @@ import com.reverie.paint.core.PaintViewModel
  */
 class SamsungStylusAdapter : StylusBrandAdapter {
     override val brand: StylusBrand = StylusBrand.SAMSUNG_SPEN
+    override val isSideButtonPressed: Boolean get() = isButtonCurrentlyDown
+
+    private var isSupportedDevice: Boolean = run {
+        val m = Build.MANUFACTURER.lowercase()
+        val b = Build.BRAND.lowercase()
+        m.contains("samsung") || b.contains("samsung")
+    }
 
     private var lastButtonDownTime: Long = 0L
     private var lastButtonReleaseTime: Long = 0L
@@ -28,13 +35,25 @@ class SamsungStylusAdapter : StylusBrandAdapter {
     private var buttonClickCount: Int = 0
     // Samsung Notes 语义: 侧键按住期间发生过落笔(临时橡皮笔画), 松键时不触发单击/长按动作
     private var strokeHappenedSincePress: Boolean = false
+    private var downX: Float = 0f
+    private var downY: Float = 0f
     private var pendingSingleClickRunnable: Runnable? = null
     private val handler = Handler(Looper.getMainLooper())
+
+    companion object {
+        // 防抖门限：低于此间隔视为硬件/系统重复上报(如 MotionEvent 与 KeyEvent 跨通道交叉触发或微动抖动)
+        private const val MIN_CLICK_INTERVAL_MS = 80L
+        // 双击时间窗口：在此窗口内的第2次释放判定为双击
+        private const val DOUBLE_CLICK_TIMEOUT_MS = 280L
+        // 长按判定阈值
+        private const val LONG_PRESS_TIMEOUT_MS = 450L
+    }
 
     override fun detect(context: Context, vm: PaintViewModel): StylusDeviceDetected? {
         val manufacturer = Build.MANUFACTURER.lowercase()
         val brandName = Build.BRAND.lowercase()
         val isSamsungDevice = manufacturer.contains("samsung") || brandName.contains("samsung")
+        isSupportedDevice = isSamsungDevice
 
         var samsungStylusConnected = false
         try {
@@ -70,6 +89,8 @@ class SamsungStylusAdapter : StylusBrandAdapter {
         vm: PaintViewModel,
         feedbackManager: StylusFeedbackManager,
     ): Boolean {
+        if (!isSupportedDevice) return false
+
         val buttonState = event.buttonState
         val isPrimaryBtnDown = (buttonState and MotionEvent.BUTTON_PRIMARY) != 0 ||
                 (buttonState and MotionEvent.BUTTON_STYLUS_PRIMARY) != 0 ||
@@ -78,15 +99,25 @@ class SamsungStylusAdapter : StylusBrandAdapter {
         val now = SystemClock.uptimeMillis()
 
         if (isPrimaryBtnDown && !isButtonCurrentlyDown) {
+            // 防抖：刚释放不久（在 MIN_CLICK_INTERVAL_MS 内）的边缘抖动或残留，忽略为重复
+            if (now - lastButtonReleaseTime < MIN_CLICK_INTERVAL_MS) {
+                return true
+            }
             isButtonCurrentlyDown = true
             lastButtonDownTime = now
             strokeHappenedSincePress = false
-            return false
+            downX = event.x
+            downY = event.y
+            return true
         } else if (isPrimaryBtnDown && isButtonCurrentlyDown) {
-            // 侧键按住期间笔尖接触屏幕: 该笔是临时橡皮, 松键不应再触发动作
+            // 侧键按住期间笔尖接触屏幕并有实质性位移(临时橡皮笔画), 松键时不触发单击/长按动作
             val action = event.actionMasked
-            if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_MOVE) {
-                strokeHappenedSincePress = true
+            if (action == MotionEvent.ACTION_MOVE && event.getPressure(0) > 0.01f) {
+                val dx = event.x - downX
+                val dy = event.y - downY
+                if (kotlin.math.hypot(dx, dy) > 24f) {
+                    strokeHappenedSincePress = true
+                }
             }
             return false
         } else if (!isPrimaryBtnDown && isButtonCurrentlyDown) {
@@ -106,44 +137,69 @@ class SamsungStylusAdapter : StylusBrandAdapter {
         feedbackManager: StylusFeedbackManager,
     ): Boolean {
         isButtonCurrentlyDown = false
+
+        // 核心防重：若距上次释放间隔极短 (< MIN_CLICK_INTERVAL_MS)，必为 MotionEvent 与 KeyEvent 跨通道重复到达，直接静默丢弃
+        if (now - lastButtonReleaseTime < MIN_CLICK_INTERVAL_MS) {
+            return true
+        }
+
         val pressDuration = now - lastButtonDownTime
         val timeSinceLastRelease = now - lastButtonReleaseTime
         lastButtonReleaseTime = now
 
-        // 按住侧键画过临时橡皮笔画: 抑制动作 (Samsung Notes 标准行为)
-        if (strokeHappenedSincePress) {
+        // 按住侧键真正画过临时橡皮笔画: 抑制动作 (Samsung Notes 标准行为)
+        if (strokeHappenedSincePress && vm.samsungSideButtonErase) {
             strokeHappenedSincePress = false
             pendingSingleClickRunnable?.let { handler.removeCallbacks(it) }
             pendingSingleClickRunnable = null
             buttonClickCount = 0
-            return false
+            lastButtonReleaseTime = 0L
+            return true
         }
+        strokeHappenedSincePress = false
 
-        if (pressDuration > 450L) {
+        if (pressDuration > LONG_PRESS_TIMEOUT_MS) {
             pendingSingleClickRunnable?.let { handler.removeCallbacks(it) }
             pendingSingleClickRunnable = null
             buttonClickCount = 0
-            return handleLongPress(vm, feedbackManager)
+            lastButtonReleaseTime = 0L
+            handleLongPress(vm, feedbackManager)
+            return true
         }
 
-        if (timeSinceLastRelease < 320L) {
+        if (buttonClickCount == 1 &&
+            timeSinceLastRelease <= DOUBLE_CLICK_TIMEOUT_MS &&
+            vm.samsungDoubleClickAction != "none"
+        ) {
             pendingSingleClickRunnable?.let { handler.removeCallbacks(it) }
             pendingSingleClickRunnable = null
             buttonClickCount = 0
-            return handleDoubleClick(vm, feedbackManager)
+            lastButtonReleaseTime = 0L
+            handleDoubleClick(vm, feedbackManager)
+            return true
         } else {
             buttonClickCount = 1
             pendingSingleClickRunnable?.let { handler.removeCallbacks(it) }
+
+            // 若用户未配置双击动作 (none), 则无需等待双击超时判定, 立即派发单击以实现零延迟切换!
+            if (vm.samsungDoubleClickAction == "none") {
+                buttonClickCount = 0
+                lastButtonReleaseTime = 0L
+                handleSingleClick(vm, feedbackManager)
+                return true
+            }
+
             val runnable = Runnable {
                 if (buttonClickCount == 1) {
                     buttonClickCount = 0
+                    lastButtonReleaseTime = 0L
                     handleSingleClick(vm, feedbackManager)
                 }
             }
             pendingSingleClickRunnable = runnable
-            handler.postDelayed(runnable, 280L)
+            handler.postDelayed(runnable, DOUBLE_CLICK_TIMEOUT_MS)
+            return true
         }
-        return false
     }
 
     /**
@@ -162,13 +218,39 @@ class SamsungStylusAdapter : StylusBrandAdapter {
         vm: PaintViewModel,
         feedbackManager: StylusFeedbackManager,
     ): Boolean {
-        if (event.action == KeyEvent.ACTION_UP) {
-            when (event.keyCode) {
-                KeyEvent.KEYCODE_STYLUS_BUTTON_PRIMARY -> {
-                    return handleDoubleClick(vm, feedbackManager)
+        if (!isSupportedDevice) return false
+
+        val keyCode = event.keyCode
+        if (keyCode != KeyEvent.KEYCODE_STYLUS_BUTTON_PRIMARY &&
+            keyCode != KeyEvent.KEYCODE_BUTTON_1 &&
+            keyCode != 308
+        ) {
+            return false
+        }
+
+        val now = SystemClock.uptimeMillis()
+
+        when (event.action) {
+            KeyEvent.ACTION_DOWN -> {
+                if (event.repeatCount > 0) return true
+                if (now - lastButtonReleaseTime < MIN_CLICK_INTERVAL_MS) {
+                    return true
                 }
-                KeyEvent.KEYCODE_STYLUS_BUTTON_SECONDARY -> {
-                    return handleSingleClick(vm, feedbackManager)
+                if (!isButtonCurrentlyDown) {
+                    isButtonCurrentlyDown = true
+                    lastButtonDownTime = now
+                    strokeHappenedSincePress = false
+                }
+                return true
+            }
+            KeyEvent.ACTION_UP -> {
+                if (isButtonCurrentlyDown) {
+                    return onSideButtonReleased(now, vm, feedbackManager)
+                } else {
+                    if (now - lastButtonReleaseTime < MIN_CLICK_INTERVAL_MS) {
+                        return true
+                    }
+                    return onSideButtonReleased(now, vm, feedbackManager)
                 }
             }
         }
@@ -208,5 +290,8 @@ class SamsungStylusAdapter : StylusBrandAdapter {
     override fun release() {
         pendingSingleClickRunnable?.let { handler.removeCallbacks(it) }
         pendingSingleClickRunnable = null
+        buttonClickCount = 0
+        lastButtonReleaseTime = 0L
+        isButtonCurrentlyDown = false
     }
 }

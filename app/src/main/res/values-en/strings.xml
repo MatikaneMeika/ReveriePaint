@@ -280,7 +280,7 @@
     <string name="settings_auto_save_info_title">About Auto-save</string>
     <string name="settings_auto_save_info_desc">Auto-save runs silently in the background only when changes occur, without interrupting your drawing strokes</string>
     <string name="settings_auto_save_history">Recent Auto-saved Snapshots</string>
-    <string name="settings_auto_save_history_sub">View and restore up to 5 recently retained snapshots</string>
+    <string name="settings_auto_save_history_sub">View snapshots, restore drafts, or manually clean up backups</string>
     <string name="auto_save_history_title">Recent Auto-save History</string>
     <string name="auto_save_history_empty">No auto-saved snapshots yet</string>
     <string name="auto_save_history_empty_sub">Snapshots created during painting will be listed here</string>
@@ -291,6 +291,8 @@
     <string name="auto_save_restore_as_copy">Restore as New Copy</string>
     <string name="auto_save_restore_confirm_title">Restore Snapshot</string>
     <string name="auto_save_restore_confirm_msg">Current canvas has unsaved changes. Restoring this snapshot will replace current unsaved content. Continue?</string>
+    <string name="auto_save_restore_confirm_msg_clean">About to restore snapshot of \"%1$s\", please choose restore mode:</string>
+    <string name="auto_save_badge_emergency">Emergency Rescue</string>
     <string name="crash_recovery_title">Abnormal Exit Detected</string>
     <string name="crash_recovery_desc">The app closed unexpectedly last time. A recent backup draft was found. Would you like to restore it now?</string>
     <string name="crash_recovery_confirm">Restore Now</string>
@@ -378,12 +380,13 @@
     <string name="tool_select_similar">Similar Color Selection</string>
     <string name="tool_select">Selection</string>
     <string name="tool_transform">Transform</string>
-    <string name="tool_move">Move</string>
     <string name="tool_crop">Crop</string>
     <string name="tool_picker">Eyedropper</string>
     <string name="tool_text">Text</string>
     <string name="tool_liquify">Liquify</string>
     <string name="tool_measure">Measure</string>
+    <string name="measure_clear">Clear</string>
+    <string name="measure_stroke_width">Width</string>
     <string name="tool_path">Path</string>
     <string name="tool_reference">Reference</string>
     <string name="tool_symmetry">Symmetry</string>
@@ -430,6 +433,18 @@
     <string name="toast_project_import_image_failed">Failed to import image: %s</string>
     <string name="project_default_import_name">Imported Artwork</string>
     <string name="project_default_import_image_name">Imported Image</string>
+    <string name="toast_project_healed_recovery">Project layers recovered via self-healing fallback</string>
+    <string name="toast_project_save_low_storage">Insufficient storage, save cancelled to prevent corruption</string>
+    <string name="dialog_storage_insufficient_title">Insufficient Storage</string>
+    <string name="dialog_storage_insufficient_desc">Remaining storage is too low. Write stopped to protect project from corruption. Please free up space and try again</string>
+    <string name="diagnostics_dialog_title">System Diagnostics &amp; Logs</string>
+    <string name="diagnostics_dialog_desc">Includes device info, memory state, action breadcrumbs, and sanitized process logcat</string>
+    <string name="diagnostics_dialog_generating">Capturing and generating diagnostics log...</string>
+    <string name="diagnostics_copy_btn">Copy Log</string>
+    <string name="diagnostics_save_downloads_btn">Save to Downloads</string>
+    <string name="diagnostics_share_btn">Share Log</string>
+    <string name="diagnostics_save_success_toast">Log saved to: %s</string>
+    <string name="diagnostics_save_failed_toast">Failed to save log file</string>
 
     <!-- Tool Action Toasts -->
     <string name="toast_undo">Undo</string>
@@ -485,7 +500,6 @@
     <string name="shortcut_def_gradient">Gradient Tool</string>
     <string name="shortcut_def_crop">Crop Tool</string>
     <string name="shortcut_def_transform">Transform Tool</string>
-    <string name="shortcut_def_move">Move Tool</string>
     <string name="shortcut_def_filter_hsv">Hue/Saturation/Value</string>
     <string name="shortcut_def_filter_curves">Color Curves</string>
     <string name="shortcut_def_filter_blur">Gaussian Blur</string>
@@ -750,6 +764,8 @@
     <string name="settings_layer_height_spacious">Spacious</string>
     <string name="settings_panel_pinning_title">Panel Pin &amp; Drag</string>
     <string name="settings_panel_pinning_desc">Allow pinning and dragging layer and brush panels freely</string>
+    <string name="settings_layer_header_inherit_alpha_title">Layer Header Shortcut for Inherit Alpha</string>
+    <string name="settings_layer_header_inherit_alpha_desc">Use inherit alpha for the layer panel header button instead of clipping mask</string>
     <string name="settings_brush_size_scales_with_canvas_title">Brush Max Size Follows Canvas</string>
     <string name="settings_brush_size_scales_with_canvas_desc">Automatically set maximum brush size to 1/2 of the canvas longer side</string>
     <string name="settings_canvas_rotation">Rotate Canvas</string>
@@ -842,6 +858,28 @@
     <string name="quick_action_merge_down">Merge Down</string>
     <string name="quick_action_clear_layer">Clear Layer</string>
     <string name="quick_action_disable_touch">Disable Touch</string>
+
+    <!-- Quick Color Strings -->
+    <string name="tool_quick_color">Quick Color</string>
+    <string name="quick_color_window_title">Quick Color</string>
+    <string name="color_window_title">Color</string>
+    <string name="quick_action_toggle_quick_color">Quick Color</string>
+    <string name="quick_color_add_palette">Add to Palette</string>
+    <string name="quick_color_swap">Swap Colors</string>
+    <string name="quick_color_eyedropper">Eyedropper</string>
+
+    <!-- Quick Layer Strings -->
+    <string name="tool_quick_layer">Quick Layers</string>
+    <string name="quick_layer_window_title">Quick Layers</string>
+    <string name="quick_action_toggle_quick_layer">Quick Layers</string>
+    <string name="quick_layer_open_full_panel">Open Layers Panel</string>
+    <string name="quick_layer_opacity_format">Opacity %1$d%%</string>
+    <string name="quick_layer_new">New Layer</string>
+    <string name="quick_layer_duplicate">Duplicate Layer</string>
+    <string name="quick_layer_merge">Merge Down</string>
+    <string name="quick_layer_delete">Delete Layer</string>
+    <string name="quick_layer_alpha_lock">Lock Alpha</string>
+    <string name="quick_layer_empty">No Layers</string>
 
     <string name="settings_gesture_pen_hint">Note: Multi-touch gestures work regardless of stylus mode. Two-finger undo and three-finger redo remain available</string>
     <string name="settings_eyedropper_long_press_title">Long Press Eyedropper</string>
@@ -975,6 +1013,7 @@
     <string name="layer_op_merge_group">Merge Group</string>
     <string name="layer_op_lock_group">Lock Group</string>
     <string name="layer_op_clip">Clipping Mask</string>
+    <string name="layer_op_alpha_inherit">Inherit Alpha</string>
     <string name="layer_op_pass_through">Pass-Through</string>
     <string name="layer_op_duplicate">Duplicate</string>
     <string name="layer_op_delete_layer">Delete Layer</string>
@@ -1175,16 +1214,21 @@
     <string name="brush_new_group_hint">Enter group name</string>
     <string name="brush_group_already_exists">Group already exists</string>
 
-    <!-- Brush Studio Tabs -->
-    <string name="brush_studio_tab_tip">Tip Shape</string>
-    <string name="brush_studio_tab_masking">Masking Brush</string>
-    <string name="brush_studio_tab_stroke">Stroke</string>
-    <string name="brush_studio_tab_color">Color</string>
-    <string name="brush_studio_tab_geometry">Geometry</string>
-    <string name="brush_studio_tab_texture">Texture</string>
-    <string name="brush_studio_tab_pressure">Pressure</string>
-    <string name="brush_studio_tab_engine">Engine</string>
-    <string name="brush_studio_tab_info">Properties</string>
+    <!-- Brush Studio Tabs (5 Modules) -->
+    <string name="brush_studio_tab_tip">Tip &amp; Shape</string>
+    <string name="brush_studio_tab_stroke">Stroke &amp; Dynamics</string>
+    <string name="brush_studio_tab_color">Color &amp; Smudge</string>
+    <string name="brush_studio_tab_texture">Texture &amp; Mask</string>
+    <string name="brush_studio_tab_engine">Preset &amp; Engine</string>
+    <string name="brush_studio_tex_pattern_title">Texture Pattern</string>
+    <string name="brush_studio_tex_choose">Choose Pattern</string>
+    <string name="brush_studio_tex_import_custom">Import Custom Pattern</string>
+    <string name="brush_studio_tex_dialog_title">Texture Pattern Library</string>
+    <string name="brush_studio_tex_toast_imported">Pattern imported successfully</string>
+    <string name="brush_studio_tex_toast_import_failed">Failed to import pattern</string>
+    <string name="brush_studio_tex_none">Default (No Pattern)</string>
+    <string name="brush_studio_scratchpad_undo">Undo Stroke</string>
+    <string name="brush_studio_scratchpad_title">Live Scratchpad</string>
 
     <!-- Brush Studio Dialogs & Actions -->
     <string name="brush_studio_back_canvas">Back to Canvas</string>
@@ -1278,6 +1322,14 @@
     <string name="brush_studio_geo_angle_jitter">Angle Jitter</string>
     <string name="brush_studio_geo_auto_rotate">Follow Stroke Direction</string>
     <string name="brush_studio_tex_enable">Enable Texture Overlay</string>
+    <string name="brush_studio_pattern_title">Texture Pattern</string>
+    <string name="brush_studio_pattern_choose">Change Pattern</string>
+    <string name="brush_studio_pattern_import">Import Pattern</string>
+    <string name="brush_studio_pattern_default">Default Paper</string>
+    <string name="brush_studio_pattern_custom_prefix">Custom: %s</string>
+    <string name="brush_studio_pattern_toast_imported">Imported texture pattern: %s</string>
+    <string name="brush_studio_pattern_toast_failed">Failed to import pattern</string>
+    <string name="brush_studio_scratchpad_sub">Native Krita Engine Offline Preview</string>
     <string name="brush_studio_tex_blend_mode">Texture Blend Mode</string>
     <string name="brush_studio_tex_scale">Texture Scale</string>
     <string name="brush_studio_tex_strength">Texture Strength</string>
@@ -1396,6 +1448,19 @@
     <string name="brush_dynamics_add_point_hint">Tap grid to add points, drag to adjust curve</string>
     <string name="brush_dynamics_live_cursor">Live Feedback</string>
     <string name="brush_dynamics_strength">Dynamic Strength</string>
+    <string name="brush_studio_revert_changes">Revert Changes</string>
+    <string name="brush_studio_revert_confirm">Discard all changes made during this studio session and revert to initial state? This cannot be undone.</string>
+    <string name="brush_studio_revert_toast">Reverted to state before entering studio</string>
+    <string name="brush_studio_scratchpad_toggle">Scratchpad</string>
+    <string name="brush_studio_curve_edit">Edit Curve</string>
+    <string name="brush_studio_curve_test_hint">Pressure Test Strip (draw strokes to test dynamics)</string>
+    <string name="brush_studio_smudge_mode">Smudge Mode</string>
+    <string name="brush_studio_smudge_mode_dulling">Dulling</string>
+    <string name="brush_studio_smudge_mode_smearing">Smearing</string>
+    <string name="brush_studio_color_rate">Color Rate</string>
+    <string name="brush_studio_composite_op">Brush Blend Mode</string>
+    <string name="brush_studio_tip_fade">Fade</string>
+    <string name="brush_studio_tip_softness">Softness</string>
 
     <!-- Color Components & Sliders -->
     <string name="color_num_dialog_range">Range: %1$s ~ %2$s%3$s</string>
@@ -1443,6 +1508,27 @@
     <string name="typography_line_height">Line Height</string>
     <string name="typography_dialog_title">Edit Text</string>
     <string name="typography_dialog_placeholder">Type text here (multi-line supported)...</string>
+    <string name="typography_snap">Snap</string>
+    <string name="typography_font_family">Font</string>
+    <string name="typography_font_sans">Sans-Serif</string>
+    <string name="typography_font_picker_title">Select Font</string>
+    <string name="typography_font_preset_category">System &amp; Presets</string>
+    <string name="typography_font_custom_category">Custom Fonts</string>
+    <string name="typography_font_import_btn">Import Font (TTF / OTF)</string>
+    <string name="typography_font_preview_sample">The quick brown fox jumps over the lazy dog · 123</string>
+    <string name="typography_font_import_success">Font imported successfully</string>
+    <string name="typography_font_import_failed">Failed to import font, check file format</string>
+    <string name="typography_font_empty_custom">No custom fonts imported</string>
+    <string name="typography_font_delete">Delete Font</string>
+    <string name="typography_font_lxgw_wenkai">LXGW WenKai (Built-in)</string>
+    <string name="typography_vertical">Vertical</string>
+    <string name="typography_horizontal">Horizontal</string>
+    <string name="typography_direction_rtl">RTL</string>
+    <string name="typography_direction_ltr">LTR</string>
+    <string name="typography_orientation">Layout</string>
+    <string name="typography_align">Align</string>
+    <string name="typography_vertical_rtl">Vertical (RTL)</string>
+    <string name="typography_vertical_ltr">Vertical (LTR)</string>
 
     <!-- Drawing Guide Panel -->
     <string name="guide_title">Drawing Guide</string>
@@ -1557,7 +1643,13 @@
     <string name="stylus_touch_and_cursor">Touch &amp; Cursor</string>
     <string name="stylus_pen_mode_desc">Disable finger drawing. One finger pans, two fingers zoom and rotate</string>
     <string name="stylus_prediction_title">Ultra-low Latency Prediction</string>
-    <string name="stylus_prediction_desc">120Hz/144Hz millisecond transient forward prediction for zero lag</string>
+    <string name="stylus_prediction_desc">Reduce stroke latency with OEM hardware SDK or in-app software prediction</string>
+    <string name="stylus_prediction_algo_hardware">Hardware SDK Algorithm</string>
+    <string name="stylus_prediction_algo_hardware_desc">Leverages system and OEM SDK prediction (supports OPPO, vivo, HUAWEI, Xiaomi, etc.)</string>
+    <string name="stylus_prediction_algo_software">App Software Algorithm</string>
+    <string name="stylus_prediction_algo_software_desc">Predicts via Kalman filtering and front-buffer preview, closer to pen tip with universal compatibility</string>
+    <string name="stylus_front_buffer_prediction_title">Front-Buffer Prediction</string>
+    <string name="stylus_front_buffer_prediction_desc">Direct tip preview to screen, ink stays closer to the pen tip</string>
     <string name="stylus_brush_cursor">Brush Cursor</string>
     <string name="stylus_brush_cursor_desc">Cursor display policy when hovering or painting</string>
     <string name="stylus_eraser_cursor">Eraser Cursor</string>
@@ -1586,6 +1678,7 @@
     <string name="stylus_honor_features">Double-tap gestures, foldable pen side key, and haptic vibration feedback</string>
     <string name="stylus_samsung_features">Side button mappings &amp; haptic feedback config</string>
     <string name="stylus_xiaomi_features">Writing, screenshot and focus button mapping, hold-to-erase and tactile feedback</string>
+    <string name="stylus_vivo_features">Body double-tap, writing vibration and ultra-low-latency stroke prediction</string>
     <string name="stylus_generic_features">Standard Android pressure and tilt protocol</string>
     <string name="stylus_cursor_mode_none">Hidden</string>
     <string name="stylus_cursor_mode_drawing">While Painting</string>
@@ -1676,10 +1769,12 @@
     <string name="stylus_xiaomi_double_tap_action">Primary Button Double Click</string>
     <string name="stylus_xiaomi_secondary_action">Secondary (Screenshot) Button Click</string>
     <string name="stylus_xiaomi_focus_action">Focus Button Click (Focus Pen)</string>
-    <string name="stylus_xiaomi_hint">Tip: If stylus buttons do not respond, check stylus shortcut settings in HyperOS system settings</string>
+    <string name="stylus_xiaomi_hint">Tip: Long-pressing Focus key activates HyperOS system laser pointer; set to None to forward key events to app keyboard shortcuts</string>
 
     <!-- Generic Stylus -->
     <string name="stylus_generic_title">Generic Stylus Settings</string>
+    <string name="stylus_generic_enable_protocol">Enable Generic Button Mapping</string>
+    <string name="stylus_generic_enable_protocol_desc">Enable barrel buttons and hold-to-erase for third-party standard styluses, disabled by default to prevent conflicts with Samsung, Huawei, Xiaomi, etc.</string>
     <string name="stylus_generic_side_key">Side Button Behavior</string>
     <string name="stylus_generic_key_mapping">Button Actions</string>
     <string name="stylus_generic_primary_action">Primary Button (Barrel 1)</string>
@@ -1693,6 +1788,7 @@
     <string name="stylus_huawei_title">HUAWEI M-Pencil Settings</string>
     <string name="stylus_huawei_model">Stylus Hardware Model</string>
     <string name="stylus_huawei_auto_model">Auto Detect (%s)</string>
+    <string name="stylus_huawei_model_pro">HUAWEI M-Pencil Pro (NearLink/Pinch)</string>
     <string name="stylus_huawei_model_gen3">HUAWEI M-Pencil (3rd Gen NearLink)</string>
     <string name="stylus_huawei_model_gen2">HUAWEI M-Pencil (2nd Gen)</string>
     <string name="stylus_huawei_model_gen1">HUAWEI M-Pencil / M-Pen (1st Gen)</string>
@@ -1700,6 +1796,8 @@
     <string name="stylus_huawei_press_4k">4,096 Levels Pressure</string>
     <string name="stylus_huawei_double_tap">Barrel Double-Tap Gesture</string>
     <string name="stylus_huawei_double_tap_action">Double-Tap Action</string>
+    <string name="stylus_huawei_squeeze">Barrel Squeeze / Pinch Gesture</string>
+    <string name="stylus_huawei_squeeze_action">Squeeze / Pinch Action</string>
     <string name="stylus_huawei_side_key">Physical Side Button</string>
     <string name="stylus_huawei_hold_eraser">Hold Side Button to Erase</string>
     <string name="stylus_huawei_hold_eraser_desc">Holding the side button while touching turns stroke into temporary eraser</string>
@@ -1708,8 +1806,8 @@
     <string name="stylus_huawei_long_press_action">Long-Press Action</string>
     <string name="stylus_huawei_haptics">Haptic Feedback</string>
     <string name="stylus_huawei_haptics_title">Haptic Vibration on Gesture</string>
-    <string name="stylus_huawei_haptics_desc">Provide transient tactile vibration when double-tap or button action fires</string>
-    <string name="stylus_huawei_hint">Note: If double-tap does not respond, ensure double-tap gesture is enabled in System Settings -> Accessibility features -> Stylus</string>
+    <string name="stylus_huawei_haptics_desc">Provide transient tactile vibration when double-tap, squeeze, or button action fires</string>
+    <string name="stylus_huawei_hint">Note: If double-tap or squeeze does not respond, ensure the corresponding gestures are enabled in System Settings -> Accessibility features -> Stylus</string>
 
     <!-- HONOR Magic-Pencil -->
     <string name="stylus_honor_title">HONOR Magic-Pencil Settings</string>
@@ -1730,6 +1828,31 @@
     <string name="stylus_honor_haptics_title">Haptic Vibration on Gesture</string>
     <string name="stylus_honor_haptics_desc">Provide transient tactile vibration when double-tap or button action fires</string>
     <string name="stylus_honor_hint">Note: If double-tap does not respond, ensure double-tap gesture is enabled in System Settings -> Accessibility features -> Stylus -> Double-tap</string>
+
+    <!-- vivo / iQOO Pencil -->
+    <string name="stylus_vivo_title">vivo / iQOO Stylus Settings</string>
+    <string name="stylus_vivo_model">Stylus Hardware Model</string>
+    <string name="stylus_vivo_auto_model">Auto Detect (%s)</string>
+    <string name="stylus_vivo_model_pencil2">vivo Pencil2 / iQOO Pencil (2nd Gen)</string>
+    <string name="stylus_vivo_model_pencil2_nv">vivo Pencil2 NV (No Vibration)</string>
+    <string name="stylus_vivo_model_pencil2s">iQOO Pencil Air / vivo Pencil2s / iQOO Pencil2s</string>
+    <string name="stylus_vivo_model_pencil3">vivo Pencil3 / iQOO Pencil3 (3rd Gen)</string>
+    <string name="stylus_vivo_model_pencil1">vivo Pencil (1st Gen)</string>
+    <string name="stylus_vivo_no_vibrate_badge">No Writing Vibration</string>
+    <string name="stylus_vivo_double_tap_action">Body Double-Tap Action</string>
+    <string name="stylus_vivo_key_mapping">Button Actions</string>
+    <string name="stylus_vivo_primary_action">Primary Button Click</string>
+    <string name="stylus_vivo_secondary_action">Secondary Button Click</string>
+    <string name="stylus_vivo_side_key">Button Behavior</string>
+    <string name="stylus_vivo_hold_eraser">Hold Button to Erase</string>
+    <string name="stylus_vivo_hold_eraser_desc">Holding the button while touching turns the stroke into a temporary eraser; releasing restores the tool</string>
+    <string name="stylus_vivo_vibrate">Writing Vibration</string>
+    <string name="stylus_vivo_vibrate_pen">In-Pen Writing Vibration</string>
+    <string name="stylus_vivo_vibrate_pen_desc">Drives the pen motor for paper-like tactile feedback while writing; the system stylus writing-vibration switch must also be enabled</string>
+    <string name="stylus_vivo_prediction">Stroke Prediction</string>
+    <string name="stylus_vivo_prediction_enable">Ultra-Low-Latency Prediction</string>
+    <string name="stylus_vivo_prediction_desc">The vivo engine predicts pen trajectory and extends the tip tangent forward; only applied to solid plain brushes</string>
+    <string name="stylus_vivo_hint">Note: Double-tap and writing vibration rely on the system stylus service. If double-tap does not respond, enable the double-tap gesture in System Settings -> Stylus</string>
     <string name="stylus_action_switch_brush_eraser">Switch Brush/Eraser</string>
     <string name="stylus_action_follow_system">Follow System</string>
     <string name="stylus_action_undo">Undo</string>
@@ -1848,7 +1971,6 @@
     <string name="layer_fill_layer">Fill Layer</string>
     <string name="layer_thumbnail">Layer Thumbnail</string>
     <string name="layer_solo">Solo</string>
-    <string name="layer_alpha_inherit">Inherit Alpha</string>
     <string name="layer_locked">Lock</string>
     <string name="curves_ch_red">Red (R)</string>
     <string name="curves_ch_green">Green (G)</string>
@@ -1878,7 +2000,7 @@
     <string name="export_format_psd_desc">Preserves all layers, blend modes and clipping properties</string>
     <string name="export_format_psd_tag">Layered Project</string>
     <string name="export_format_kra_name">Krita Project</string>
-    <string name="export_format_kra_desc">Standard Krita format with alpha inheritance and blending</string>
+    <string name="export_format_kra_desc">Standard Krita format with clipping masks and blending</string>
     <string name="export_format_kra_tag">Native Krita</string>
     <string name="export_format_revp_name">ReveriePaint Native</string>
     <string name="export_format_revp_desc">Proprietary package preserving drawing time and layer data</string>
@@ -2329,9 +2451,49 @@
     <string name="liquify_hardness">Hardness</string>
     <string name="project_copying_progress">Copying artworks (%1$d/%2$d)</string>
     <string name="project_copy_result">Copied %1$d artworks, %2$d failed</string>
+    <string name="quick_shape_setting">QuickShape</string>
+    <string name="quick_shape_setting_hint">Draw with the brush, hold still, then lift to edit\nInactive with drawing assistance or airbrush</string>
+    <string name="quick_shape_ready">Shape recognized — lift to edit</string>
+    <string name="quick_shape_context_changed">Canvas changed; shape editing ended</string>
+    <string name="quick_shape_failed">Could not draw the shape. Retry or keep the freehand stroke</string>
+    <string name="quick_shape_edit_hint">Drag to move; drag handles to resize or rotate\nOriginal stroke stays as reference; Done replaces it with your current brush</string>
+    <string name="quick_shape_snap_horizontal">Horizontal</string>
+    <string name="quick_shape_snap_vertical">Vertical</string>
+    <string name="quick_shape_snap_diagonal">45°</string>
+    <string name="quick_shape_rotate_ccw">Rotate -15°</string>
+    <string name="quick_shape_rotate_cw">Rotate +15°</string>
+    <string name="quick_shape_scale_down">Smaller</string>
+    <string name="quick_shape_scale_up">Larger</string>
+    <string name="quick_shape_per_point_pressure">Per-point pressure</string>
+    <string name="quick_shape_per_point_pressure_hint">Keep the original pressure variation instead of a uniform width</string>
+    <string name="quick_shape_keep_freehand">Keep freehand</string>
+    <string name="quick_shape_line">Line</string>
+    <string name="quick_shape_circle">Circle</string>
+    <string name="quick_shape_ellipse">Ellipse</string>
+    <string name="quick_shape_rectangle">Rectangle</string>
+    <string name="quick_shape_triangle">Triangle</string>
     <string name="canvas_edit_previous_page">Previous actions</string>
     <string name="canvas_edit_next_page">Next actions</string>
     <string name="canvas_edit_page">%1$d / %2$d</string>
+    <string name="pattern_title">Patterns</string>
+    <string name="pattern_hint">Tiles the image, including transparency; large images are reduced to a maximum dimension of 2048 px</string>
+    <string name="pattern_import">Import pattern</string>
+    <string name="pattern_empty">No patterns yet. Import a PNG or JPG to get started</string>
+    <string name="pattern_import_failed">Cannot read this image. Try another PNG or JPG</string>
+    <string name="pattern_fill_failed">Cannot fill. Select an editable layer</string>
+    <string name="pattern_use_color">Use foreground color</string>
+    <string name="pattern_layer_choose">Choose fill pattern</string>
+    <string name="pattern_opacity">Pattern opacity</string>
+    <string name="pattern_scale_title">Pattern size</string>
+    <string name="pattern_scale_crisp">Sharp edges</string>
+    <string name="pattern_scale_smooth">Smooth</string>
+    <string name="pattern_scale_crisp_hint">For pixel art and linework. Keeps hard edges; shrinking may lose thin lines and enlarging may look jagged</string>
+    <string name="pattern_scale_smooth_hint">For photos and continuous textures. Softens edges; enlarging cannot add original detail</string>
+    <string name="pattern_scale_value">%1$d%% · %2$d × %3$d px</string>
+    <string name="pattern_scale_hint">Keeps the aspect ratio, up to 2048 px per side. Reset restores the imported size. The library image stays unchanged</string>
+    <string name="pattern_scale_failed">Cannot resize this pattern. Try a smaller scale</string>
+    <string name="pattern_delete_title">Delete pattern</string>
+    <string name="pattern_delete_confirm">Are you sure you want to delete this pattern? This cannot be undone</string>
 
     <!-- 帧转图层 -->
     <string name="f2l_menu">Frames to layers</string>
@@ -2351,5 +2513,62 @@
     <string name="tl_expand_group">Expand group</string>
     <string name="f2l_progress">Splitting %1$d / %2$d</string>
     <string name="f2l_running">Splitting…</string>
+    <string name="reference_cache_title">Reference cache</string>
+    <string name="reference_cache_clear">Clear reference cache</string>
+    <string name="reference_cache_size">Local references use %1$s and are not included in project files</string>
+    <string name="reference_cache_confirm">Remove local reference copies, display state and legacy reference cache for all artworks, including the current one. References will need to be added again. Artwork files, gallery originals and window position settings will be kept</string>
+    <string name="reference_cache_clearing">Clearing reference cache…</string>
+    <string name="reference_cache_cleared">Reference cache cleared</string>
+    <string name="reference_cache_failed">Some reference cache files could not be removed. Please retry</string>
+    <string name="reference_import_legacy">Import legacy references</string>
+    <string name="reference_import_failed">Could not import references; existing images were kept</string>
+    <string name="reference_restore_failed">Could not read reference data; please add the reference images again</string>
+
+    <string name="quick_shape_quad_setting">Recognize quadrilaterals</string>
+    <string name="quick_shape_quad_hint">Keep four drawn corners without forcing right angles; eight-point controls add resizing and contour editing</string>
+    <string name="quick_shape_curve_setting">Recognize three-point curves</string>
+    <string name="quick_shape_curve_hint">Drag both endpoints and the on-curve midpoint independently; when enabled, prefer editable curves over circular arcs</string>
+    <string name="quick_shape_quad">Quadrilateral</string>
+    <string name="quick_shape_curve">Curve</string>
+    <string name="quick_shape_quad_edit_hint">Drag the four corners to reshape, or drag elsewhere to move</string>
+    <string name="quick_shape_curve_edit_hint">Drag either endpoint; drag the middle point to bend the curve through it</string>
+    <string name="quick_shape_curved">Curved contours</string>
+    <string name="quick_shape_curved_hint">Off joins corners with straight edges; on allows curves. Also change this in the editor</string>
+    <string name="quick_shape_contour_lines">Straight edges</string>
+    <string name="quick_shape_contour_curves">Curved edges</string>
+    <string name="quick_shape_relaxed">Forgiving recognition</string>
+    <string name="quick_shape_relaxed_hint">Tolerate uneven rectangle edges, rounded corners and arc wobble; arc recognition must also be enabled</string>
+    <string name="quick_shape_arc">Arc</string>
+    <string name="quick_shape_arc_edit_hint">Drag to move; drag endpoints or the curve handle to reshape the arc</string>
+    <string name="quick_shape_angle_snap">Snap line angles</string>
+    <string name="quick_shape_angle_snap_hint">Snap QuickShape lines near horizontal, vertical, 30°, 45° and related angles</string>
+    <string name="quick_shape_arc_setting">Recognize arcs</string>
+    <string name="quick_shape_arc_setting_hint">Recognize open circular arcs; keep freehand strokes when uncertain</string>
+    <string name="quick_shape_box_handles">Eight resize handles</string>
+    <string name="quick_shape_box_handles_hint">Resize rectangles at corners and edge midpoints; rotate with the separate handle</string>
+    <string name="quick_shape_contour_setting">Hold to reshape</string>
+    <string name="quick_shape_contour_setting_hint">Hold the button while dragging a rectangle handle with another finger or pen</string>
+    <string name="quick_shape_contour">Custom contour</string>
+    <string name="quick_shape_hold_contour">Hold to reshape</string>
+    <string name="quick_shape_box_edit_hint">Drag the eight handles to resize; use the separate handle above to rotate</string>
+    <string name="quick_shape_conversions">Quadrilateral conversions</string>
+    <string name="quick_shape_conversions_hint">Show buttons to convert to a parallelogram, rectangle, or square while editing</string>
+    <string name="quick_shape_to_parallelogram">To parallelogram</string>
+    <string name="quick_shape_to_rectangle">To rectangle</string>
+
+    <!-- AutoSave and Snapshot Recovery Enhancements -->
+    <string name="auto_save_history_stats">%1$d snapshots · %2$s MB</string>
+    <string name="auto_save_history_stats_with_limit">%1$d / %2$d snapshots · %3$s MB</string>
+    <string name="auto_save_capacity_pill">Limit: %1$d</string>
+    <string name="settings_auto_save_max_snapshots">Snapshot Retention Count</string>
+    <string name="settings_auto_save_max_snapshots_sub">Maximum number of snapshots to keep, oldest will be evicted when limit is reached</string>
+    <string name="settings_snapshot_count_unit">%1$d</string>
+    <string name="settings_snapshot_count_default">%1$d (Default)</string>
+    <string name="auto_save_clear_confirm_title">Clear All Snapshots?</string>
+    <string name="auto_save_clear_confirm_desc">This will delete all historical backup snapshots across artworks to free up storage space. This action cannot be undone.</string>
+    <string name="crash_recovery_badge">Auto-Backup Disaster Recovery</string>
+    <string name="crash_recovery_time_prefix">Backup Time: %1$s</string>
+    <string name="crash_recovery_size_prefix">File Size: %1$s</string>
+    <string name="auto_save_snapshot_meta">%1$d strokes · %2$d layers · %3$s</string>
 </resources>
 

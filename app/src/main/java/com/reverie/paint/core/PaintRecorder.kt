@@ -4,6 +4,7 @@
 
 package com.reverie.paint.core
 
+import com.reverie.paint.model.RecordedBrushOverrides
 import com.reverie.paint.model.RecordingBuffer
 import com.reverie.paint.model.RecordingEvents.CONTEXT
 import com.reverie.paint.model.RecordingEvents.CONTEXT_EXT
@@ -92,6 +93,7 @@ class PaintRecorder {
     private var lastCompositeOp: String? = null
     private var lastColor: String? = null
     private var lastLayer = -2
+    private var lastPatternPng: ByteArray? = null
 
     /** Start a recording session. [snapshotSource] is the document file the
      *  session started from (copied to [snapshotTempDir]); null for a blank
@@ -108,6 +110,7 @@ class PaintRecorder {
         prior: ParsedRecording? = null,
     ) {
         endSession()
+        lastPatternPng = null
         buffer = RecordingBuffer()
         recording = true
         sessionW = w
@@ -174,6 +177,7 @@ class PaintRecorder {
         val obsolete = synchronized(ioLock) {
             recording = false
             buffer = null
+            lastPatternPng = null
             eventCount = 0
             priorEvents = null
             priorEventCount = 0
@@ -420,6 +424,12 @@ class PaintRecorder {
         writePayload(it)
     }
 
+    fun patternFill(event: com.reverie.paint.model.PatternFillEvent) =
+        toolOp(com.reverie.paint.model.RecordingEvents.T_PATTERN_FILL) {
+            event.writeTo(it, lastPatternPng)
+            lastPatternPng = event.png
+        }
+
     fun pointsOp(
         op: Int,
         points: List<Pair<Int, Int>>,
@@ -482,6 +492,7 @@ class PaintRecorder {
         airbrushEnabled: Boolean,
         airbrushRate: Double,
         isCustomized: Boolean = false,
+        spacingCustomized: Boolean = true,
     ) = emit(CONTEXT_EXT) {
         it.f32(softness.toFloat())
         it.f32(spacing.toFloat())
@@ -495,7 +506,7 @@ class PaintRecorder {
         it.str(secondaryColor)
         it.u8(if (airbrushEnabled) 1 else 0)
         it.f32(airbrushRate.toFloat())
-        it.u8(if (isCustomized) 1 else 0)
+        it.u8(RecordedBrushOverrides.encode(isCustomized, spacingCustomized))
     }
 
     /** Force the next captureContext() to emit a full CONTEXT (all sentinels

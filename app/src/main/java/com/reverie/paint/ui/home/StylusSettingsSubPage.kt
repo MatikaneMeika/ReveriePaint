@@ -20,6 +20,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.VolumeDown
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.AutoFixHigh
+import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.Brush
 import androidx.compose.material.icons.rounded.ControlCamera
 import androidx.compose.material.icons.rounded.Edit
@@ -48,6 +49,7 @@ import com.reverie.paint.ui.home.stylus.OppoStylusConfigDialog
 import com.reverie.paint.ui.home.stylus.PressureCurveDetailDialog
 import com.reverie.paint.ui.home.stylus.PressureCurveHelpDialog
 import com.reverie.paint.ui.home.stylus.SamsungStylusConfigDialog
+import com.reverie.paint.ui.home.stylus.VivoStylusConfigDialog
 import com.reverie.paint.ui.home.stylus.XiaomiStylusConfigDialog
 import com.reverie.paint.ui.home.stylus.GenericStylusConfigDialog
 import com.reverie.paint.ui.theme.Theme
@@ -108,12 +110,14 @@ internal fun StylusSettingsSubPage(
             // 1. 触控与光标设置
             SettingCategoryTitle(stringResource(R.string.stylus_touch_and_cursor))
             SettingGroup {
+                val isPredictionOn = vm.stylusPredictionMasterEnabled
+                val touchTotal = if (isPredictionOn) 8 else 6
                 SettingSwitchGroupItem(
                     icon = Icons.Rounded.Edit,
                     title = stringResource(R.string.settings_pen_mode),
                     summary = stringResource(R.string.stylus_pen_mode_desc),
                     checked = vm.penOnlyMode,
-                    shape = settingGroupShape(0, 6),
+                    shape = settingGroupShape(0, touchTotal),
                     onCheckedChange = { vm.updatePenOnlyMode(it) },
                 )
                 SettingSwitchGroupItem(
@@ -121,24 +125,41 @@ internal fun StylusSettingsSubPage(
                     title = stringResource(R.string.settings_pen_mode_single_finger_pan_title),
                     summary = stringResource(R.string.settings_pen_mode_single_finger_pan_desc),
                     checked = vm.penModeSingleFingerPanEnabled,
-                    shape = settingGroupShape(1, 6),
+                    shape = settingGroupShape(1, touchTotal),
                     onCheckedChange = { vm.updatePenModeSingleFingerPan(it) },
                 )
                 SettingSwitchGroupItem(
                     icon = Icons.Rounded.Speed,
                     title = stringResource(R.string.stylus_prediction_title),
                     summary = stringResource(R.string.stylus_prediction_desc),
-                    checked = vm.stylusStrokePredictionEnabled,
-                    shape = settingGroupShape(2, 6),
-                    onCheckedChange = { vm.updateStylusStrokePredictionEnabled(it) },
+                    checked = isPredictionOn,
+                    shape = settingGroupShape(2, touchTotal),
+                    onCheckedChange = { vm.updateStylusPredictionMaster(it) },
                 )
+                if (isPredictionOn) {
+                    SettingRadioGroupItem(
+                        title = stringResource(R.string.stylus_prediction_algo_hardware),
+                        summary = stringResource(R.string.stylus_prediction_algo_hardware_desc),
+                        selected = vm.stylusPredictionAlgorithmType == "HARDWARE",
+                        shape = settingGroupShape(3, touchTotal),
+                        onClick = { vm.updateStylusPredictionAlgorithm("HARDWARE") },
+                    )
+                    SettingRadioGroupItem(
+                        title = stringResource(R.string.stylus_prediction_algo_software),
+                        summary = stringResource(R.string.stylus_prediction_algo_software_desc),
+                        selected = vm.stylusPredictionAlgorithmType == "SOFTWARE",
+                        shape = settingGroupShape(4, touchTotal),
+                        onClick = { vm.updateStylusPredictionAlgorithm("SOFTWARE") },
+                    )
+                }
+                val cursorOffset = if (isPredictionOn) 5 else 3
                 SettingDropdownGroupItem(
                     icon = Icons.Rounded.Brush,
                     title = stringResource(R.string.stylus_brush_cursor),
                     summary = stringResource(R.string.stylus_brush_cursor_desc),
                     currentText = cursorModeOptions.getOrElse(vm.brushCursorMode) { cursorModeOptions[0] },
                     options = cursorModeOptions,
-                    shape = settingGroupShape(3, 6),
+                    shape = settingGroupShape(cursorOffset, touchTotal),
                     onSelect = { vm.updateBrushCursorMode(it) },
                 )
                 SettingDropdownGroupItem(
@@ -147,7 +168,7 @@ internal fun StylusSettingsSubPage(
                     summary = stringResource(R.string.stylus_eraser_cursor_desc),
                     currentText = cursorModeOptions.getOrElse(vm.eraserCursorMode) { cursorModeOptions.last() },
                     options = cursorModeOptions,
-                    shape = settingGroupShape(4, 6),
+                    shape = settingGroupShape(cursorOffset + 1, touchTotal),
                     onSelect = { vm.updateEraserCursorMode(it) },
                 )
                 SettingDropdownGroupItem(
@@ -156,7 +177,7 @@ internal fun StylusSettingsSubPage(
                     summary = stringResource(R.string.stylus_cursor_style_desc),
                     currentText = cursorStyleOptions.getOrElse(vm.cursorStyleMode) { cursorStyleOptions[0] },
                     options = cursorStyleOptions,
-                    shape = settingGroupShape(5, 6),
+                    shape = settingGroupShape(cursorOffset + 2, touchTotal),
                     onSelect = { vm.updateCursorStyleMode(it) },
                 )
             }
@@ -298,6 +319,16 @@ internal fun StylusSettingsSubPage(
                                 onClick = { activeConfigBrand = StylusBrand.XIAOMI_STYLUS },
                             )
                         }
+                        StylusBrand.VIVO_PENCIL -> {
+                            SettingStylusDeviceRow(
+                                title = device.deviceName,
+                                summary = stringResource(R.string.stylus_vivo_features),
+                                isCurrentDevice = device.isCurrentDeviceSupported,
+                                isConnected = device.isConnected,
+                                shape = shape,
+                                onClick = { activeConfigBrand = StylusBrand.VIVO_PENCIL },
+                            )
+                        }
                         StylusBrand.GENERIC -> {
                             SettingStylusDeviceRow(
                                 title = device.deviceName,
@@ -347,6 +378,9 @@ internal fun StylusSettingsSubPage(
         }
         StylusBrand.XIAOMI_STYLUS -> {
             XiaomiStylusConfigDialog(vm = vm, onDismiss = { activeConfigBrand = null })
+        }
+        StylusBrand.VIVO_PENCIL -> {
+            VivoStylusConfigDialog(vm = vm, onDismiss = { activeConfigBrand = null })
         }
         StylusBrand.GENERIC -> {
             GenericStylusConfigDialog(vm = vm, onDismiss = { activeConfigBrand = null })

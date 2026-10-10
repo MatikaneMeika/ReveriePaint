@@ -186,6 +186,7 @@ fun PaintingPage(
     val panYState = remember { mutableFloatStateOf(0f) }
     var panY by panYState
     var fitScale by remember { mutableFloatStateOf(1f) }
+    var canvasTouchView by remember { mutableStateOf<com.reverie.paint.ui.painting.canvas.CanvasTouchView?>(null) }
 
     var canvasW by remember { mutableStateOf(1) }
     var canvasH by remember { mutableStateOf(1) }
@@ -517,7 +518,7 @@ fun PaintingPage(
     }
     // Clear transient tool state when switching tools, and activate tool states
     androidx.compose.runtime.LaunchedEffect(tool) {
-        if (tool == Tool.TRANSFORM || tool == Tool.MOVE) {
+        if (tool == Tool.TRANSFORM) {
             val targets = vm.editTargetLayers()
             val activeLayer = vm.layers.firstOrNull { it.index == vm.currentLayerIndex }
             if (activeLayer?.isGroup == true && targets.isEmpty()) {
@@ -626,6 +627,7 @@ fun PaintingPage(
                 vm.commitTypographyToCanvas()
             } else {
                 vm.isTypographyEditing = false
+                vm.typographySnapGuides = emptyList()
             }
         }
         if (tool != Tool.LASSO && vm.lassoMultiPoints.isNotEmpty()) {
@@ -642,7 +644,9 @@ fun PaintingPage(
             .focusRequester(focusRequester)
             .focusable()
             .onKeyEvent {
-                if (vm.isTextInputActive || vm.isShortcutRecordingActive) {
+                if (vm.isQuickShapeEditing) {
+                    true
+                } else if (vm.isTextInputActive || vm.isShortcutRecordingActive) {
                     false
                 } else {
                     vm.handleKeyEvent(it)
@@ -694,6 +698,7 @@ fun PaintingPage(
                         indicatorTick++
                     }
                 },
+                onTouchViewReady = { canvasTouchView = it },
                 onTextRequested = { x, y ->
                     textDialogPos = x to y
                 },
@@ -861,6 +866,13 @@ fun PaintingPage(
             )
         }
 
+        if (vm.showLowStorageDialog) {
+            LowStorageDialog(
+                message = vm.lowStorageMessage,
+                onDismiss = { vm.showLowStorageDialog = false },
+            )
+        }
+
         vm.brushImportProgress?.let { progress ->
             BrushImportProgressDialog(progress = progress)
         }
@@ -873,10 +885,12 @@ fun PaintingPage(
         // BackHandler for Android system back button/gesture: close active panels first, then request exit
         androidx.activity.compose.BackHandler {
             when {
+                vm.isQuickShapeEditing -> vm.cancelQuickShape()
                 vm.isCanvasAdjustActive -> vm.exitCanvasAdjustMode()
                 filterController != null -> filterController.cancel()
                 vm.pendingExternalImageUri != null -> vm.pendingExternalImageUri = null
                 vm.pendingExternalBrushUris != null -> vm.pendingExternalBrushUris = null
+                vm.showLowStorageDialog -> vm.showLowStorageDialog = false
                 vm.showToolbarSqueezedDialog -> vm.showToolbarSqueezedDialog = false
                 showDiscardConfirmDialog -> showDiscardConfirmDialog = false
                 showExitSaveDialog -> showExitSaveDialog = false
@@ -1037,6 +1051,7 @@ fun PaintingPage(
                         when (it) {
                             Tool.REFERENCE -> {
                                 vm.referenceWindowOpen = !vm.referenceWindowOpen
+                                vm.persistReferenceState()
                                 moreToolsOpen = false
                             }
                             Tool.SHORTCUT -> {
@@ -1047,6 +1062,16 @@ fun PaintingPage(
                             Tool.QUICK_BRUSH -> {
                                 vm.quickBrushWindowOpen = !vm.quickBrushWindowOpen
                                 vm.persistQuickBrushState()
+                                moreToolsOpen = false
+                            }
+                            Tool.QUICK_COLOR -> {
+                                vm.quickColorWindowOpen = !vm.quickColorWindowOpen
+                                vm.persistQuickColorState()
+                                moreToolsOpen = false
+                            }
+                            Tool.QUICK_LAYER -> {
+                                vm.quickLayerWindowOpen = !vm.quickLayerWindowOpen
+                                vm.persistQuickLayerState()
                                 moreToolsOpen = false
                             }
                             Tool.SYMMETRY -> {
@@ -1398,6 +1423,27 @@ fun PaintingPage(
                     liquifyBrushSize = it
                     vm.setLiquifyBrushSize(it.toDouble())
                 },
+            )
+        }
+        androidx.compose.animation.AnimatedVisibility(
+            visible = filterController == null && tool == Tool.MEASURE,
+            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 24.dp),
+            enter =
+                androidx.compose.animation.fadeIn(Motion.enterSpring()),
+            exit =
+                androidx.compose.animation.fadeOut(
+                    androidx.compose.animation.core
+                        .tween(200),
+                ),
+        ) {
+            MeasurePanel(
+                vm = vm,
+                strokeWidth = vm.measureStrokeWidth,
+                onStrokeWidth = { vm.measureStrokeWidth = it },
+                onClear = {
+                    com.reverie.paint.ui.painting.canvas.CanvasTouchView.activeTouchView?.clearMeasure()
+                },
+                hazeState = hazeState,
             )
         }
 
@@ -1888,6 +1934,7 @@ fun PaintingPage(
                     when (it) {
                         Tool.REFERENCE -> {
                             vm.referenceWindowOpen = !vm.referenceWindowOpen
+                            vm.persistReferenceState()
                             moreToolsOpen = false
                         }
                         Tool.SHORTCUT -> {
@@ -1898,6 +1945,16 @@ fun PaintingPage(
                         Tool.QUICK_BRUSH -> {
                             vm.quickBrushWindowOpen = !vm.quickBrushWindowOpen
                             vm.persistQuickBrushState()
+                            moreToolsOpen = false
+                        }
+                        Tool.QUICK_COLOR -> {
+                            vm.quickColorWindowOpen = !vm.quickColorWindowOpen
+                            vm.persistQuickColorState()
+                            moreToolsOpen = false
+                        }
+                        Tool.QUICK_LAYER -> {
+                            vm.quickLayerWindowOpen = !vm.quickLayerWindowOpen
+                            vm.persistQuickLayerState()
                             moreToolsOpen = false
                         }
                         Tool.SYMMETRY -> {
@@ -1960,7 +2017,7 @@ fun PaintingPage(
         ) {
             ReferenceWindow(
                 vm = vm,
-                onClose = { vm.referenceWindowOpen = false },
+                onClose = { vm.referenceWindowOpen = false; vm.persistReferenceState() },
                 hazeState = hazeState,
                 opacity = vm.popupPanelOpacity,
             )
@@ -1996,6 +2053,45 @@ fun PaintingPage(
                 onClose = {
                     vm.quickBrushWindowOpen = false
                     vm.persistQuickBrushState()
+                },
+                hazeState = hazeState,
+                opacity = vm.popupPanelOpacity,
+            )
+        }
+
+        // ---- Persistent Floating Quick Color Window (常驻悬浮快捷颜色小窗) ----
+        AnimatedVisibility(
+            visible = vm.quickColorWindowOpen,
+            enter = fadeIn(Motion.enterSpring()) + androidx.compose.animation.scaleIn(Motion.enterSpring(), initialScale = 0.92f),
+            exit = fadeOut(Motion.exitTween(150)) + androidx.compose.animation.scaleOut(Motion.exitTween(150), targetScale = 0.92f),
+            modifier = Modifier.zIndex(77f),
+        ) {
+            com.reverie.paint.ui.painting.quickcolor.QuickColorWindow(
+                vm = vm,
+                onClose = {
+                    vm.quickColorWindowOpen = false
+                    vm.persistQuickColorState()
+                },
+                hazeState = hazeState,
+                opacity = vm.popupPanelOpacity,
+            )
+        }
+
+        // ---- Persistent Floating Quick Layer Window (常驻悬浮快捷图层小窗) ----
+        AnimatedVisibility(
+            visible = vm.quickLayerWindowOpen,
+            enter = fadeIn(Motion.enterSpring()) + androidx.compose.animation.scaleIn(Motion.enterSpring(), initialScale = 0.92f),
+            exit = fadeOut(Motion.exitTween(150)) + androidx.compose.animation.scaleOut(Motion.exitTween(150), targetScale = 0.92f),
+            modifier = Modifier.zIndex(78f),
+        ) {
+            com.reverie.paint.ui.painting.quicklayer.QuickLayerWindow(
+                vm = vm,
+                onClose = {
+                    vm.quickLayerWindowOpen = false
+                    vm.persistQuickLayerState()
+                },
+                onOpenFullLayerPanel = {
+                    layerPanelOpen = true
                 },
                 hazeState = hazeState,
                 opacity = vm.popupPanelOpacity,
@@ -2097,6 +2193,7 @@ fun PaintingPage(
                     textDialogPos = null
                     if (vm.typographyConfig.text.isBlank()) {
                         vm.isTypographyEditing = false
+                        vm.typographySnapGuides = emptyList()
                     }
                 },
             )
@@ -2218,6 +2315,13 @@ fun PaintingPage(
 
         // ---- Floating Layer Drag Overlay (Global Root Window) ----
         LayerDragOverlay(vm = vm)
+        if (vm.isQuickShapeEditing) {
+            com.reverie.paint.ui.painting.canvas.QuickShapeEditor(
+                vm, zoomState, rotationState, panXState, panYState, fitScale,
+                onViewTransform = { z, r, px, py -> canvasTouchView?.applyViewTransform(z, r, px, py) },
+                modifier = Modifier.fillMaxSize().zIndex(2000f),
+            )
+        }
     }
 }
 }

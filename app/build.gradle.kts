@@ -51,8 +51,8 @@ android {
         }
         minSdk = 23
         targetSdk = 33
-        versionCode = 32
-        versionName = "1.4.4"
+        versionCode = 35
+        versionName = "1.4.7"
 
         buildConfigField("String", "AIFADIAN_API_TOKEN", "\"$aifadianApiToken\"")
         buildConfigField("String", "AIFADIAN_USER_ID", "\"$aifadianUserId\"")
@@ -195,6 +195,11 @@ if (usePrebuiltJni) {
 
 dependencies {
     implementation(files("libs/Qt6Android.jar"))
+    // vivo/iQOO 手写笔 SDK (penengine-simplify 1.0.0.7) 随仓库内置:
+    // jar = 从官方 maven AAR 提取的 classes.jar; native 库 libtrack_prediction.so
+    // 位于 third_party/android-native-libs (与 OPPO libforecast.so 同规格随 jniLibs 打包),
+    // 预测参数资产 optparam*.cfg 位于 src/main/assets (SDK 运行时从 assets 读取)
+    implementation(files("libs/vivo-penengine-simplify-1.0.0.7.jar"))
     implementation(platform("androidx.compose:compose-bom:2026.05.00"))
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-graphics")
@@ -207,6 +212,10 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.9.4")
     implementation("dev.chrisbanes.haze:haze:1.5.3")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    // 超低延迟前缓冲渲染组件 (API 29+, 用于笔尖前沿单缓冲直出)
+    implementation("androidx.graphics:graphics-core:1.0.4")
+    // Android 原生系统级运动预测库 (适用于华为、三星、通用及各家 Android 平板)
+    implementation("androidx.input:input-motionprediction:1.0.0")
 
     testImplementation("junit:junit:4.13.2")
 }

@@ -280,7 +280,7 @@
     <string name="settings_auto_save_info_title">自动保存机制说明</string>
     <string name="settings_auto_save_info_desc">自动保存将在后台静默执行，仅在画布产生修改时触发，且绝不会打断您当前的笔画绘制</string>
     <string name="settings_auto_save_history">最近自动保存快照</string>
-    <string name="settings_auto_save_history_sub">查看并恢复最近持久保留的5个历史快照</string>
+    <string name="settings_auto_save_history_sub">查看历史快照、恢复草稿或手动清理备份</string>
     <string name="auto_save_history_title">最近自动保存历史</string>
     <string name="auto_save_history_empty">暂无自动保存快照</string>
     <string name="auto_save_history_empty_sub">作画过程中触发自动保存后将自动记录在此</string>
@@ -291,6 +291,8 @@
     <string name="auto_save_restore_as_copy">恢复为新副本</string>
     <string name="auto_save_restore_confirm_title">恢复历史快照</string>
     <string name="auto_save_restore_confirm_msg">当前画布存在未保存的修改，恢复快照将替换当前未保存内容，是否继续？</string>
+    <string name="auto_save_restore_confirm_msg_clean">即将恢复「%1$s」的历史快照，请选择恢复方式：</string>
+    <string name="auto_save_badge_emergency">崩溃抢救</string>
     <string name="crash_recovery_title">检测到异常退出</string>
     <string name="crash_recovery_desc">检测到应用上次未正常关闭，系统已为您自动找到崩溃前的备份草稿，是否立即恢复？</string>
     <string name="crash_recovery_confirm">立即恢复</string>
@@ -378,12 +380,13 @@
     <string name="tool_select_similar">相似色选择</string>
     <string name="tool_select">选区</string>
     <string name="tool_transform">变换</string>
-    <string name="tool_move">移动</string>
     <string name="tool_crop">裁剪</string>
     <string name="tool_picker">拾色</string>
     <string name="tool_text">文本</string>
     <string name="tool_liquify">液化</string>
     <string name="tool_measure">测量</string>
+    <string name="measure_clear">清除</string>
+    <string name="measure_stroke_width">粗细</string>
     <string name="tool_path">路径</string>
     <string name="tool_reference">参考</string>
     <string name="tool_symmetry">对称</string>
@@ -430,6 +433,18 @@
     <string name="toast_project_import_image_failed">导入图片失败: %s</string>
     <string name="project_default_import_name">导入作品</string>
     <string name="project_default_import_image_name">导入图片</string>
+    <string name="toast_project_healed_recovery">已通过容错自愈模式恢复工程图层</string>
+    <string name="toast_project_save_low_storage">可用存储空间过低，已取消保存以防文件损坏</string>
+    <string name="dialog_storage_insufficient_title">存储空间不足</string>
+    <string name="dialog_storage_insufficient_desc">设备剩余存储空间过低，为防止工程损坏已阻止写盘，请清理设备空间后重试</string>
+    <string name="diagnostics_dialog_title">系统运行诊断与日志</string>
+    <string name="diagnostics_dialog_desc">包含设备软硬件信息、内存状态、操作轨迹以及当前进程 Logcat，已自动对密码与 Token 脱敏</string>
+    <string name="diagnostics_dialog_generating">正在抓取并生成系统诊断日志...</string>
+    <string name="diagnostics_copy_btn">复制日志</string>
+    <string name="diagnostics_save_downloads_btn">保存到下载</string>
+    <string name="diagnostics_share_btn">分享日志</string>
+    <string name="diagnostics_save_success_toast">日志已保存至: %s</string>
+    <string name="diagnostics_save_failed_toast">保存日志文件失败</string>
 
     <!-- Tool Action Toasts -->
     <string name="toast_undo">撤销</string>
@@ -485,7 +500,6 @@
     <string name="shortcut_def_gradient">渐变工具</string>
     <string name="shortcut_def_crop">裁剪工具</string>
     <string name="shortcut_def_transform">变换工具</string>
-    <string name="shortcut_def_move">移动工具</string>
     <string name="shortcut_def_filter_hsv">色相/饱和度/明度</string>
     <string name="shortcut_def_filter_curves">色彩曲线</string>
     <string name="shortcut_def_filter_blur">高斯模糊</string>
@@ -750,6 +764,8 @@
     <string name="settings_layer_height_spacious">宽松</string>
     <string name="settings_panel_pinning_title">面板固定与自由平移</string>
     <string name="settings_panel_pinning_desc">允许固定图层与画笔面板并在画布上拖动平移</string>
+    <string name="settings_layer_header_inherit_alpha_title">图层顶部快捷为继承透明度</string>
+    <string name="settings_layer_header_inherit_alpha_desc">开启后图层面板顶部快捷按钮切换为继承透明度，关闭则为剪切蒙版</string>
     <string name="settings_brush_size_scales_with_canvas_title">笔刷上限跟随画布</string>
     <string name="settings_brush_size_scales_with_canvas_desc">笔刷最大尺寸自动设定为画布长边的 1/2</string>
     <string name="settings_canvas_rotation">画布可旋转</string>
@@ -842,6 +858,28 @@
     <string name="quick_action_merge_down">向下合并</string>
     <string name="quick_action_clear_layer">清空图层</string>
     <string name="quick_action_disable_touch">禁用触控</string>
+
+    <!-- Quick Color Strings -->
+    <string name="tool_quick_color">快捷颜色</string>
+    <string name="quick_color_window_title">快捷颜色</string>
+    <string name="color_window_title">颜色</string>
+    <string name="quick_action_toggle_quick_color">快捷颜色</string>
+    <string name="quick_color_add_palette">保存至色板</string>
+    <string name="quick_color_swap">交换前背景色</string>
+    <string name="quick_color_eyedropper">吸管取色</string>
+
+    <!-- Quick Layer Strings -->
+    <string name="tool_quick_layer">快捷图层</string>
+    <string name="quick_layer_window_title">快捷图层</string>
+    <string name="quick_action_toggle_quick_layer">快捷图层</string>
+    <string name="quick_layer_open_full_panel">展开图层面板</string>
+    <string name="quick_layer_opacity_format">不透明度 %1$d%%</string>
+    <string name="quick_layer_new">新建图层</string>
+    <string name="quick_layer_duplicate">复制图层</string>
+    <string name="quick_layer_merge">向下合并</string>
+    <string name="quick_layer_delete">删除图层</string>
+    <string name="quick_layer_alpha_lock">锁定透明度</string>
+    <string name="quick_layer_empty">暂无图层</string>
 
     <string name="settings_gesture_pen_hint">提示：多指触控手势不受笔模式影响，手写笔模式下依然可以直接使用双指撤销与三指重做</string>
     <string name="settings_eyedropper_long_press_title">长按画布吸色</string>
@@ -974,7 +1012,8 @@
     <string name="layer_op_delete_group">删除图层组</string>
     <string name="layer_op_merge_group">合并图层组</string>
     <string name="layer_op_lock_group">锁定图层组</string>
-    <string name="layer_op_clip">继承透明度</string>
+    <string name="layer_op_clip">剪切蒙版</string>
+    <string name="layer_op_alpha_inherit">继承透明度</string>
     <string name="layer_op_pass_through">穿透混合模式 (Pass-through)</string>
     <string name="layer_op_duplicate">复制图层</string>
     <string name="layer_op_delete_layer">删除图层</string>
@@ -1175,16 +1214,21 @@
     <string name="brush_new_group_hint">输入组名称</string>
     <string name="brush_group_already_exists">组已存在</string>
 
-    <!-- Brush Studio Tabs -->
-    <string name="brush_studio_tab_tip">笔尖形状</string>
-    <string name="brush_studio_tab_masking">蒙版画笔</string>
+    <!-- Brush Studio Tabs (5 Modules) -->
+    <string name="brush_studio_tab_tip">笔尖外形</string>
     <string name="brush_studio_tab_stroke">笔画动态</string>
     <string name="brush_studio_tab_color">色彩涂抹</string>
-    <string name="brush_studio_tab_geometry">几何罗盘</string>
-    <string name="brush_studio_tab_texture">材质纹理</string>
-    <string name="brush_studio_tab_pressure">压感手感</string>
-    <string name="brush_studio_tab_engine">引擎参数</string>
-    <string name="brush_studio_tab_info">笔刷属性</string>
+    <string name="brush_studio_tab_texture">纹理蒙版</string>
+    <string name="brush_studio_tab_engine">预设高级</string>
+    <string name="brush_studio_tex_pattern_title">纹理贴图图案</string>
+    <string name="brush_studio_tex_choose">选择贴图</string>
+    <string name="brush_studio_tex_import_custom">导入自定义贴图</string>
+    <string name="brush_studio_tex_dialog_title">纹理贴图库</string>
+    <string name="brush_studio_tex_toast_imported">纹理贴图导入成功</string>
+    <string name="brush_studio_tex_toast_import_failed">纹理贴图导入失败</string>
+    <string name="brush_studio_tex_none">默认无贴图</string>
+    <string name="brush_studio_scratchpad_undo">撤销笔画</string>
+    <string name="brush_studio_scratchpad_title">实时试画板</string>
 
     <!-- Brush Studio Dialogs & Actions -->
     <string name="brush_studio_back_canvas">返回画布</string>
@@ -1278,6 +1322,14 @@
     <string name="brush_studio_geo_angle_jitter">角度随机抖动 (Jitter)</string>
     <string name="brush_studio_geo_auto_rotate">沿笔画运动方向自动旋转</string>
     <string name="brush_studio_tex_enable">启用纹理材质叠加</string>
+    <string name="brush_studio_pattern_title">材质纹理贴图</string>
+    <string name="brush_studio_pattern_choose">更换纹理</string>
+    <string name="brush_studio_pattern_import">导入图案</string>
+    <string name="brush_studio_pattern_default">默认纸纹</string>
+    <string name="brush_studio_pattern_custom_prefix">自定义: %s</string>
+    <string name="brush_studio_pattern_toast_imported">已导入纹理图案: %s</string>
+    <string name="brush_studio_pattern_toast_failed">纹理图案导入失败</string>
+    <string name="brush_studio_scratchpad_sub">Krita 核心引擎离线渲染</string>
     <string name="brush_studio_tex_blend_mode">纹理混合模式</string>
     <string name="brush_studio_tex_scale">纹理缩放比 (Scale)</string>
     <string name="brush_studio_tex_strength">纹理凹凸强度 (Strength)</string>
@@ -1396,6 +1448,19 @@
     <string name="brush_dynamics_add_point_hint">点击网格添加点，拖拽点微调曲率</string>
     <string name="brush_dynamics_live_cursor">实时动态响应</string>
     <string name="brush_dynamics_strength">动态影响强度</string>
+    <string name="brush_studio_revert_changes">还原修改</string>
+    <string name="brush_studio_revert_confirm">确定要放弃本次进入工作台后的所有修改，还原至初始状态吗？此操作无法撤销</string>
+    <string name="brush_studio_revert_toast">已还原至进入工作台前的状态</string>
+    <string name="brush_studio_scratchpad_toggle">试画板</string>
+    <string name="brush_studio_curve_edit">编辑曲线</string>
+    <string name="brush_studio_curve_test_hint">压感试笔条 (轻重划线体验过渡)</string>
+    <string name="brush_studio_smudge_mode">涂抹工作模式 (Smudge Mode)</string>
+    <string name="brush_studio_smudge_mode_dulling">混色耗散 (Dulling)</string>
+    <string name="brush_studio_smudge_mode_smearing">刮刀拉伸 (Smearing)</string>
+    <string name="brush_studio_color_rate">色彩速率 (Color Rate)</string>
+    <string name="brush_studio_composite_op">画笔混合模式 (Blend Mode)</string>
+    <string name="brush_studio_tip_fade">实心率 (Fade)</string>
+    <string name="brush_studio_tip_softness">柔和度 (Softness)</string>
 
     <!-- Color Components & Sliders -->
     <string name="color_num_dialog_range">有效范围: %1$s ~ %2$s%3$s</string>
@@ -1443,6 +1508,27 @@
     <string name="typography_line_height">行距</string>
     <string name="typography_dialog_title">编辑文本内容</string>
     <string name="typography_dialog_placeholder">在此输入文字内容 (支持换行)...</string>
+    <string name="typography_snap">磁吸</string>
+    <string name="typography_font_family">字体</string>
+    <string name="typography_font_sans">无衬线体</string>
+    <string name="typography_font_picker_title">选择字体</string>
+    <string name="typography_font_preset_category">系统与预设</string>
+    <string name="typography_font_custom_category">自定义字体</string>
+    <string name="typography_font_import_btn">导入本地字体 (TTF / OTF)</string>
+    <string name="typography_font_preview_sample">永和九年，岁在癸丑 · AaBb 123</string>
+    <string name="typography_font_import_success">字体导入成功</string>
+    <string name="typography_font_import_failed">字体导入失败，请检查文件格式</string>
+    <string name="typography_font_empty_custom">暂未导入自定义字体</string>
+    <string name="typography_font_delete">删除字体</string>
+    <string name="typography_font_lxgw_wenkai">霞鹜文楷 (内置)</string>
+    <string name="typography_vertical">竖排</string>
+    <string name="typography_horizontal">横排</string>
+    <string name="typography_direction_rtl">右至左</string>
+    <string name="typography_direction_ltr">左至右</string>
+    <string name="typography_orientation">排版</string>
+    <string name="typography_align">对齐</string>
+    <string name="typography_vertical_rtl">竖排 (右至左)</string>
+    <string name="typography_vertical_ltr">竖排 (左至右)</string>
 
     <!-- Drawing Guide Panel -->
     <string name="guide_title">绘图辅助</string>
@@ -1557,7 +1643,13 @@
     <string name="stylus_touch_and_cursor">触控与光标</string>
     <string name="stylus_pen_mode_desc">开启后禁止手指绘制，单指可平移画布，双指可缩放与旋转画布</string>
     <string name="stylus_prediction_title">超低延迟笔迹预测</string>
-    <string name="stylus_prediction_desc">采用 120Hz/144Hz 毫秒级瞬态前向预测，笔迹即时紧跟笔尖</string>
+    <string name="stylus_prediction_desc">降低运笔跟手延迟，支持选择硬件厂商 SDK 或软件自研算法</string>
+    <string name="stylus_prediction_algo_hardware">硬件SDK算法</string>
+    <string name="stylus_prediction_algo_hardware_desc">调用系统及厂商原生 SDK 预测（支持 OPPO、vivo、华为、小米等）</string>
+    <string name="stylus_prediction_algo_software">APP软件算法</string>
+    <string name="stylus_prediction_algo_software_desc">基于卡尔曼滤波与前缓冲直出，笔迹更贴近笔尖且通用性更高</string>
+    <string name="stylus_front_buffer_prediction_title">前缓冲预测</string>
+    <string name="stylus_front_buffer_prediction_desc">笔尖预览直出上屏，笔迹更贴近笔尖</string>
     <string name="stylus_brush_cursor">画笔光标</string>
     <string name="stylus_brush_cursor_desc">画笔悬浮或绘制时的光标显示策略</string>
     <string name="stylus_eraser_cursor">橡皮光标</string>
@@ -1586,6 +1678,7 @@
     <string name="stylus_honor_features">笔身双击、折叠屏侧键与触感微震专属配置</string>
     <string name="stylus_samsung_features">侧键动作映射与触觉微震专属配置</string>
     <string name="stylus_xiaomi_features">书写键、截图键与焦点键自定义，按住切换橡皮与手感优化</string>
+    <string name="stylus_vivo_features">笔身双击、书写振动与超低延迟笔迹预测专属配置</string>
     <string name="stylus_generic_features">标准 Android 压感与倾角触控协议</string>
     <string name="stylus_cursor_mode_none">不显示</string>
     <string name="stylus_cursor_mode_drawing">绘画时显示</string>
@@ -1676,10 +1769,12 @@
     <string name="stylus_xiaomi_double_tap_action">主键 (书写键) 双击</string>
     <string name="stylus_xiaomi_secondary_action">副键 (截图键) 单击</string>
     <string name="stylus_xiaomi_focus_action">焦点键单击 (焦点笔专属)</string>
-    <string name="stylus_xiaomi_hint">提示：若按键未响应，请检查系统设置 -> 触控笔中是否开启快捷功能，并在 HyperOS 允许应用使用手写笔快捷键</string>
+    <string name="stylus_xiaomi_hint">提示：长按焦点键为 HyperOS 系统级隔空激光笔；若按键未响应，请检查系统设置 -> 外接设备/手写笔快捷功能，设为“无操作”时可透传至应用快捷键</string>
 
     <!-- 通用触控手写笔 -->
     <string name="stylus_generic_title">通用触控手写笔设置</string>
+    <string name="stylus_generic_enable_protocol">启用通用协议按键映射</string>
+    <string name="stylus_generic_enable_protocol_desc">为第三方标准触控协议手写笔启用侧键自定义与按住擦除，默认关闭以避免与三星、华为、小米等品牌原生手写笔产生按键冲突</string>
     <string name="stylus_generic_side_key">侧键行为</string>
     <string name="stylus_generic_key_mapping">按键动作映射</string>
     <string name="stylus_generic_primary_action">主按键 (Barrel 1)</string>
@@ -1693,6 +1788,7 @@
     <string name="stylus_huawei_title">HUAWEI M-Pencil 专属设置</string>
     <string name="stylus_huawei_model">手写笔硬件型号</string>
     <string name="stylus_huawei_auto_model">自动匹配 (%s)</string>
+    <string name="stylus_huawei_model_pro">HUAWEI M-Pencil Pro (星闪/轻捏版)</string>
     <string name="stylus_huawei_model_gen3">HUAWEI M-Pencil 第三代 (星闪版)</string>
     <string name="stylus_huawei_model_gen2">HUAWEI M-Pencil 第二代</string>
     <string name="stylus_huawei_model_gen1">HUAWEI M-Pencil / M-Pen 第一代</string>
@@ -1700,6 +1796,8 @@
     <string name="stylus_huawei_press_4k">4096级标准压感</string>
     <string name="stylus_huawei_double_tap">笔身双击手势</string>
     <string name="stylus_huawei_double_tap_action">双击响应动作</string>
+    <string name="stylus_huawei_squeeze">笔身轻捏/挤压手势</string>
+    <string name="stylus_huawei_squeeze_action">轻捏响应动作</string>
     <string name="stylus_huawei_side_key">物理侧键行为</string>
     <string name="stylus_huawei_hold_eraser">按住侧键临时变橡皮</string>
     <string name="stylus_huawei_hold_eraser_desc">按住侧键下笔即为橡皮擦，松开侧键自动切回原工具</string>
@@ -1708,8 +1806,8 @@
     <string name="stylus_huawei_long_press_action">侧键长按动作</string>
     <string name="stylus_huawei_haptics">触觉反馈</string>
     <string name="stylus_huawei_haptics_title">手势触发微震反馈</string>
-    <string name="stylus_huawei_haptics_desc">双击或按键触发快捷功能时提供瞬态微触反馈</string>
-    <string name="stylus_huawei_hint">提示：若笔身双击无响应，请在系统设置 -> 辅助功能 -> 手写笔 -> 双击中开启双击手势支持</string>
+    <string name="stylus_huawei_haptics_desc">双击、轻捏或按键触发快捷功能时提供瞬态微触反馈</string>
+    <string name="stylus_huawei_hint">提示：若笔身双击或轻捏无响应，请在系统设置 -> 辅助功能 -> 手写笔中确认相关手势开关已开启</string>
 
     <!-- HONOR Magic-Pencil -->
     <string name="stylus_honor_title">荣耀 Magic-Pencil 专属设置</string>
@@ -1730,6 +1828,31 @@
     <string name="stylus_honor_haptics_title">手势触发微震反馈</string>
     <string name="stylus_honor_haptics_desc">双击或按键触发快捷功能时提供瞬态微触反馈</string>
     <string name="stylus_honor_hint">提示：若笔身双击无响应，请在系统设置 -> 辅助功能 -> 手写笔 -> 双击切换中开启双击手势支持</string>
+
+    <!-- vivo / iQOO Pencil -->
+    <string name="stylus_vivo_title">vivo / iQOO 手写笔专属设置</string>
+    <string name="stylus_vivo_model">手写笔硬件型号</string>
+    <string name="stylus_vivo_auto_model">自动识别 (%s)</string>
+    <string name="stylus_vivo_model_pencil2">vivo Pencil2 / iQOO Pencil (第二代)</string>
+    <string name="stylus_vivo_model_pencil2_nv">vivo Pencil2 NV (无振动版)</string>
+    <string name="stylus_vivo_model_pencil2s">iQOO Pencil Air / vivo Pencil2s / iQOO Pencil2s</string>
+    <string name="stylus_vivo_model_pencil3">vivo Pencil3 / iQOO Pencil3 (第三代)</string>
+    <string name="stylus_vivo_model_pencil1">vivo Pencil (第一代)</string>
+    <string name="stylus_vivo_no_vibrate_badge">无书写振动</string>
+    <string name="stylus_vivo_double_tap_action">笔身双击动作</string>
+    <string name="stylus_vivo_key_mapping">按键动作映射</string>
+    <string name="stylus_vivo_primary_action">主键单击动作</string>
+    <string name="stylus_vivo_secondary_action">副键单击动作</string>
+    <string name="stylus_vivo_side_key">按键行为</string>
+    <string name="stylus_vivo_hold_eraser">按住按键临时变橡皮</string>
+    <string name="stylus_vivo_hold_eraser_desc">按住按键落笔时该笔画自动变为橡皮擦，抬笔恢复原工具</string>
+    <string name="stylus_vivo_vibrate">书写振动</string>
+    <string name="stylus_vivo_vibrate_pen">笔身书写振动</string>
+    <string name="stylus_vivo_vibrate_pen_desc">落笔时驱动笔身马达模拟纸感触觉；需在系统设置中同时开启手写笔「书写振动」总开关</string>
+    <string name="stylus_vivo_prediction">笔迹预测</string>
+    <string name="stylus_vivo_prediction_enable">超低延迟笔迹预测</string>
+    <string name="stylus_vivo_prediction_desc">vivo 算法引擎预测落笔轨迹，绘制时笔尖切线前向延伸；仅对纯色实心基础笔刷生效</string>
+    <string name="stylus_vivo_hint">提示：双击与书写振动依赖系统手写笔服务，若双击无响应请在系统设置 -> 手写笔中开启双击手势</string>
     <string name="stylus_action_switch_brush_eraser">切换画笔与橡皮</string>
     <string name="stylus_action_follow_system">跟随系统设置</string>
     <string name="stylus_action_undo">撤销</string>
@@ -1848,7 +1971,6 @@
     <string name="layer_fill_layer">填充图层</string>
     <string name="layer_thumbnail">图层缩略图</string>
     <string name="layer_solo">独显中</string>
-    <string name="layer_alpha_inherit">继承透明度</string>
     <string name="layer_locked">锁定</string>
     <string name="curves_ch_red">红 (R)</string>
     <string name="curves_ch_green">绿 (G)</string>
@@ -1878,7 +2000,7 @@
     <string name="export_format_psd_desc">完整保留各图层、混合模式与剪裁属性</string>
     <string name="export_format_psd_tag">分层工程</string>
     <string name="export_format_kra_name">Krita 原生工程</string>
-    <string name="export_format_kra_desc">标准 Krita 规范，含继承透明度与正片叠底</string>
+    <string name="export_format_kra_desc">标准 Krita 规范，含剪切蒙版与正片叠底</string>
     <string name="export_format_kra_tag">Krita 原生</string>
     <string name="export_format_revp_name">ReveriePaint 原生</string>
     <string name="export_format_revp_desc">专有工程包，完整保留活跃作画耗时与图层数据</string>
@@ -2329,9 +2451,49 @@
     <string name="liquify_hardness">硬度</string>
     <string name="project_copying_progress">正在复制作品（%1$d/%2$d）</string>
     <string name="project_copy_result">已复制 %1$d 项，失败 %2$d 项</string>
+    <string name="quick_shape_setting">速创形状</string>
+    <string name="quick_shape_setting_hint">画笔画完停留片刻，抬笔后调整形状\n使用绘图辅助或喷枪时不触发</string>
+    <string name="quick_shape_ready">已识别形状，抬笔后调整</string>
+    <string name="quick_shape_context_changed">画布已变化，形状编辑已结束</string>
+    <string name="quick_shape_failed">形状未能写入，请重试或保留原笔画</string>
+    <string name="quick_shape_edit_hint">拖动画面移动形状，拖动控制点调整大小或旋转\n原笔画保留作参考，完成后用当前笔刷替换</string>
+    <string name="quick_shape_snap_horizontal">水平</string>
+    <string name="quick_shape_snap_vertical">垂直</string>
+    <string name="quick_shape_snap_diagonal">45°</string>
+    <string name="quick_shape_rotate_ccw">逆时针 15°</string>
+    <string name="quick_shape_rotate_cw">顺时针 15°</string>
+    <string name="quick_shape_scale_down">缩小</string>
+    <string name="quick_shape_scale_up">放大</string>
+    <string name="quick_shape_per_point_pressure">逐点压感</string>
+    <string name="quick_shape_per_point_pressure_hint">成形后的形状延续原笔迹的轻重变化, 而不是整条等宽</string>
+    <string name="quick_shape_keep_freehand">保留原笔画</string>
+    <string name="quick_shape_line">直线</string>
+    <string name="quick_shape_circle">圆</string>
+    <string name="quick_shape_ellipse">椭圆</string>
+    <string name="quick_shape_rectangle">矩形</string>
+    <string name="quick_shape_triangle">三角形</string>
     <string name="canvas_edit_previous_page">上一页操作</string>
     <string name="canvas_edit_next_page">下一页操作</string>
     <string name="canvas_edit_page">%1$d / %2$d</string>
+    <string name="pattern_title">图案</string>
+    <string name="pattern_hint">图案平铺，支持透明背景；大图会缩小至最长边 2048 像素</string>
+    <string name="pattern_import">导入图案</string>
+    <string name="pattern_empty">还没有图案，导入 PNG 或 JPG 图片开始使用</string>
+    <string name="pattern_import_failed">无法读取这张图片，请换一张 PNG 或 JPG 重试</string>
+    <string name="pattern_fill_failed">无法填充，请选择可编辑图层</string>
+    <string name="pattern_use_color">改用前景色</string>
+    <string name="pattern_layer_choose">选择填充图案</string>
+    <string name="pattern_opacity">图案不透明度</string>
+    <string name="pattern_scale_title">图案大小</string>
+    <string name="pattern_scale_crisp">清晰边缘</string>
+    <string name="pattern_scale_smooth">平滑</string>
+    <string name="pattern_scale_crisp_hint">适合像素图和线稿，保留硬边缘；缩小时细线可能丢失，放大可能出现锯齿</string>
+    <string name="pattern_scale_smooth_hint">适合照片和连续纹理，边缘更柔和；放大不会增加原图细节</string>
+    <string name="pattern_scale_value">%1$d%% · %2$d × %3$d 像素</string>
+    <string name="pattern_scale_hint">保持宽高比例，每块图案最长边不超过 2048 像素；重置可恢复导入尺寸，图库原图不变</string>
+    <string name="pattern_scale_failed">无法调整图案大小，请缩小比例后重试</string>
+    <string name="pattern_delete_title">删除图案</string>
+    <string name="pattern_delete_confirm">确定要删除该图案吗，此操作无法撤销</string>
 
     <!-- 帧转图层 -->
     <string name="f2l_menu">帧转图层</string>
@@ -2351,5 +2513,62 @@
     <string name="tl_expand_group">展开该组</string>
     <string name="f2l_progress">正在拆分 %1$d / %2$d</string>
     <string name="f2l_running">拆分中…</string>
+    <string name="reference_cache_title">参考图缓存</string>
+    <string name="reference_cache_clear">清除参考图缓存</string>
+    <string name="reference_cache_size">本机参考图占用 %1$s，不随作品文件传输</string>
+    <string name="reference_cache_confirm">清除本机所有作品的参考图副本、显示状态及旧版参考图缓存，包括当前作品。之后需要重新添加参考图。作品文件、相册原图和窗口位置设置不会被删除</string>
+    <string name="reference_cache_clearing">正在清除参考图缓存…</string>
+    <string name="reference_cache_cleared">参考图缓存已清除</string>
+    <string name="reference_cache_failed">部分参考图缓存未能清除，请重试</string>
+    <string name="reference_import_legacy">导入旧版参考图</string>
+    <string name="reference_import_failed">参考图导入失败，已保留原有图片</string>
+    <string name="reference_restore_failed">部分参考数据无法读取，请重新添加参考图</string>
+
+    <string name="quick_shape_quad_setting">识别四边形</string>
+    <string name="quick_shape_quad_hint">保留手绘的四个顶点，不强制直角；开启八点控制可调整尺寸与轮廓</string>
+    <string name="quick_shape_curve_setting">识别三点曲线</string>
+    <string name="quick_shape_curve_hint">两端和曲线中点分别可拖动，不限定为圆弧；开启后优先识别为三点曲线</string>
+    <string name="quick_shape_quad">四边形</string>
+    <string name="quick_shape_curve">曲线</string>
+    <string name="quick_shape_quad_edit_hint">拖动四个角调整四边形，拖动画面移动整体</string>
+    <string name="quick_shape_curve_edit_hint">拖动两端调整端点；拖动中间点改变弧度，曲线始终经过它</string>
+    <string name="quick_shape_curved">曲线轮廓</string>
+    <string name="quick_shape_curved_hint">关闭时用直线连接顶点；开启后允许曲线，并可在编辑栏切换</string>
+    <string name="quick_shape_contour_lines">直线轮廓</string>
+    <string name="quick_shape_contour_curves">曲线轮廓</string>
+    <string name="quick_shape_relaxed">宽松识别</string>
+    <string name="quick_shape_relaxed_hint">容许矩形轻微歪斜、圆钝角及圆弧抖动；圆弧仍需单独开启</string>
+    <string name="quick_shape_arc">圆弧</string>
+    <string name="quick_shape_arc_edit_hint">拖动画面移动圆弧，拖动端点或弧上控制点调整弯曲程度</string>
+    <string name="quick_shape_angle_snap">直线角度吸附</string>
+    <string name="quick_shape_angle_snap_hint">接近水平、垂直及 30°、45° 等方向时吸附，仅影响速创直线</string>
+    <string name="quick_shape_arc_setting">识别圆弧</string>
+    <string name="quick_shape_arc_setting_hint">识别开放的圆形弧线，无法可靠判断时保留原笔画</string>
+    <string name="quick_shape_box_handles">八点尺寸控制</string>
+    <string name="quick_shape_box_handles_hint">在矩形四角和四边中点调整尺寸，保留独立旋转点</string>
+    <string name="quick_shape_contour_setting">按住调整轮廓</string>
+    <string name="quick_shape_contour_setting_hint">编辑矩形时，按住按钮并用另一根手指或笔拖动控制点</string>
+    <string name="quick_shape_contour">自定义轮廓</string>
+    <string name="quick_shape_hold_contour">按住调整轮廓</string>
+    <string name="quick_shape_box_edit_hint">拖动八个控制点调整尺寸，上方独立点用于旋转</string>
+    <string name="quick_shape_conversions">四边形转换</string>
+    <string name="quick_shape_conversions_hint">编辑时显示转为平行四边形、矩形和正方形的按钮</string>
+    <string name="quick_shape_to_parallelogram">转为平行四边形</string>
+    <string name="quick_shape_to_rectangle">转为矩形</string>
+
+    <!-- 自动保存与快照恢复增强 -->
+    <string name="auto_save_history_stats">共 %1$d 个快照 · 占用 %2$s MB</string>
+    <string name="auto_save_history_stats_with_limit">共 %1$d / %2$d 个快照 · 占用 %3$s MB</string>
+    <string name="auto_save_capacity_pill">上限 %1$d 个</string>
+    <string name="settings_auto_save_max_snapshots">快照保留数量</string>
+    <string name="settings_auto_save_max_snapshots_sub">历史快照的最大保留数量，达到上限时自动淘汰最旧版本</string>
+    <string name="settings_snapshot_count_unit">%1$d 个</string>
+    <string name="settings_snapshot_count_default">%1$d (默认)</string>
+    <string name="auto_save_clear_confirm_title">清空所有历史快照？</string>
+    <string name="auto_save_clear_confirm_desc">将删除所有历史备份快照以释放存储空间，此操作无法撤销</string>
+    <string name="crash_recovery_badge">自动备份安全抢救</string>
+    <string name="crash_recovery_time_prefix">备份时间：%1$s</string>
+    <string name="crash_recovery_size_prefix">文件大小：%1$s</string>
+    <string name="auto_save_snapshot_meta">%1$d 笔画 · %2$d 图层 · %3$s</string>
 </resources>
 

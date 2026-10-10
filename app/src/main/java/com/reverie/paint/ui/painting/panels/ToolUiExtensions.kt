@@ -43,7 +43,6 @@ fun Tool.labelRes(): Int = when (this) {
     Tool.MAGICWAND -> R.string.tool_magicwand
     Tool.SELECT_SIMILAR -> R.string.tool_select_similar
     Tool.TRANSFORM -> R.string.tool_transform
-    Tool.MOVE -> R.string.tool_move
     Tool.CROP -> R.string.tool_crop
     Tool.PICKER -> R.string.tool_picker
     Tool.TEXT -> R.string.tool_text
@@ -53,6 +52,8 @@ fun Tool.labelRes(): Int = when (this) {
     Tool.REFERENCE -> R.string.tool_reference
     Tool.SHORTCUT -> R.string.tool_quick_action
     Tool.QUICK_BRUSH -> R.string.tool_quick_brush
+    Tool.QUICK_COLOR -> R.string.tool_quick_color
+    Tool.QUICK_LAYER -> R.string.tool_quick_layer
     Tool.SYMMETRY -> R.string.tool_symmetry
     Tool.PERSPECTIVE -> R.string.tool_perspective
 }

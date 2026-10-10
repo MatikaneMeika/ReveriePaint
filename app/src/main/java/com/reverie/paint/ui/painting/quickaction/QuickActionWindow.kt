@@ -162,6 +162,13 @@ fun QuickActionWindow(
         }
     }
 
+    DisposableEffect(Unit) {
+        onDispose {
+            vm.quickActionWindowWidth = 0f
+            vm.quickActionWindowHeight = 0f
+        }
+    }
+
     Box(
         modifier = modifier
             .offset {
@@ -189,6 +196,8 @@ fun QuickActionWindow(
             modifier = Modifier
                 .onSizeChanged { size ->
                     windowSize = size
+                    vm.quickActionWindowWidth = size.width.toFloat()
+                    vm.quickActionWindowHeight = size.height.toFloat()
                     if (size.width > 0 && size.height > 0) {
                         val minX = marginPx
                         val maxX = (screenWidthPx - size.width - marginPx).coerceAtLeast(minX)
@@ -559,10 +568,9 @@ fun QuickActionWindow(
                 if (toastText != null) {
                     Box(
                         modifier = Modifier
-                            .shadow(8.dp, RoundedCornerShape(12.dp), spotColor = Color.Black.copy(alpha = 0.25f))
-                            .clip(RoundedCornerShape(12.dp))
+                            .shadow(8.dp, RoundedCornerShape(10.dp), spotColor = Color.Black.copy(alpha = 0.25f))
+                            .clip(RoundedCornerShape(10.dp))
                             .background(Morandi.panelHi.copy(alpha = 0.96f))
-                            .border(1.dp, Morandi.border.copy(alpha = 0.65f), RoundedCornerShape(12.dp))
                             .padding(horizontal = 10.dp, vertical = 5.dp),
                         contentAlignment = Alignment.Center,
                     ) {

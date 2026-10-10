@@ -84,10 +84,10 @@ enum class BrushSensor(
     PRESSURE("pressure", R.string.brush_sensor_pressure, R.drawable.ic_hand),
     SPEED("speed", R.string.brush_sensor_speed, R.drawable.ic_line),
     DRAWING_ANGLE("drawingangle", R.string.brush_sensor_drawingangle, R.drawable.ic_rotate_cw),
-    TILT_ELEVATION("tilt-elevation", R.string.brush_sensor_tilt_elevation, R.drawable.ic_pencil),
-    TILT_DIRECTION("tilt-direction", R.string.brush_sensor_tilt_direction, R.drawable.ic_rotate_ccw),
-    TILT_X("tilt-x", R.string.brush_sensor_tilt_x, R.drawable.ic_flip_h),
-    TILT_Y("tilt-y", R.string.brush_sensor_tilt_y, R.drawable.ic_flip_v),
+    TILT_ELEVATION("declination", R.string.brush_sensor_tilt_elevation, R.drawable.ic_pencil),
+    TILT_DIRECTION("ascension", R.string.brush_sensor_tilt_direction, R.drawable.ic_rotate_ccw),
+    TILT_X("xtilt", R.string.brush_sensor_tilt_x, R.drawable.ic_flip_h),
+    TILT_Y("ytilt", R.string.brush_sensor_tilt_y, R.drawable.ic_flip_v),
     ROTATION("rotation", R.string.brush_sensor_rotation, R.drawable.ic_refresh),
     TANGENTIAL_PRESSURE("tangentialpressure", R.string.brush_sensor_tangential_pressure, R.drawable.ic_sliders),
     FADE("fade", R.string.brush_sensor_fade, R.drawable.ic_droplet),
@@ -98,7 +98,13 @@ enum class BrushSensor(
     companion object {
         fun fromId(id: String): BrushSensor {
             val normalized = id.trim().lowercase()
-            return entries.firstOrNull { it.id == normalized } ?: PRESSURE
+            return when (normalized) {
+                "declination", "tilt-elevation", "tiltelevation" -> TILT_ELEVATION
+                "ascension", "tilt-direction", "tiltdirection" -> TILT_DIRECTION
+                "xtilt", "tilt-x", "tiltx" -> TILT_X
+                "ytilt", "tilt-y", "tilty" -> TILT_Y
+                else -> entries.firstOrNull { it.id == normalized } ?: PRESSURE
+            }
         }
     }
 }
@@ -127,7 +133,8 @@ data class DynamicOptionConfig(
     }
 
     /**
-     * 单调三次样条插值评估给定 x 输入 (0.0..1.0) 下的 y 输出 (0.0..1.0)
+     * 对齐 Krita KisCubicCurve / KisCubicSpline 的自然三次样条插值评估
+     * 当只有 2 个控制点时，严格为纯线性插值 (直线)；当 >=3 个点时通过 Thomas 算法求解连续三次样条
      */
     fun evaluate(x: Float): Float {
         val clampedX = x.coerceIn(0f, 1f)
@@ -136,20 +143,79 @@ data class DynamicOptionConfig(
         if (clampedX <= sorted.first().x) return sorted.first().y
         if (clampedX >= sorted.last().x) return sorted.last().y
 
-        // 查找包含 clampedX 的线段区间
-        for (i in 0 until sorted.size - 1) {
-            val p0 = sorted[i]
-            val p1 = sorted[i + 1]
-            if (clampedX in p0.x..p1.x) {
-                val dx = p1.x - p0.x
-                if (dx <= 0.0001f) return p0.y
-                val t = (clampedX - p0.x) / dx
-                // 使用 Hermite / Smoothstep 产生光滑平滑过渡
-                val smoothT = t * t * (3f - 2f * t)
-                return (p0.y + (p1.y - p0.y) * smoothT).coerceIn(0f, 1f)
+        val n = sorted.size - 1
+        // 2 个点时，严格按纯直线段线性计算，绝不加入人造平滑 / S 弯曲
+        if (n == 1) {
+            val p0 = sorted[0]
+            val p1 = sorted[1]
+            val dx = p1.x - p0.x
+            if (dx <= 0.0001f) return p0.y
+            val t = (clampedX - p0.x) / dx
+            return (p0.y + (p1.y - p0.y) * t).coerceIn(0f, 1f)
+        }
+
+        // >= 3 个点: 求解 Krita 自然三次样条 (自然边界条件 c[0]=0, c[n]=0)
+        val h = FloatArray(n)
+        val a = FloatArray(n + 1)
+        for (i in 0 until n) {
+            h[i] = maxOf(1e-5f, sorted[i + 1].x - sorted[i].x)
+            a[i] = sorted[i].y
+        }
+        a[n] = sorted[n].y
+
+        val triB = FloatArray(n - 1)
+        val triF = FloatArray(n - 1)
+        val triA = FloatArray(n - 1)
+
+        for (i in 0 until n - 1) {
+            triB[i] = 2f * (h[i] + h[i + 1])
+            triF[i] = 6f * ((a[i + 2] - a[i + 1]) / h[i + 1] - (a[i + 1] - a[i]) / h[i])
+        }
+        for (i in 1 until n - 1) {
+            triA[i] = h[i]
+        }
+
+        val size = n - 1
+        val cInner = FloatArray(size)
+        if (size == 1) {
+            cInner[0] = triF[0] / triB[0]
+        } else {
+            val alpha = FloatArray(size)
+            val beta = FloatArray(size)
+            alpha[1] = -triA[0] / triB[0]
+            beta[1] = triF[0] / triB[0]
+            for (i in 1 until size - 1) {
+                val denom = triA[i - 1] * alpha[i] + triB[i]
+                alpha[i + 1] = -triA[i] / denom
+                beta[i + 1] = (triF[i] - triA[i - 1] * beta[i]) / denom
+            }
+            val lastDenom = triB[size - 1] + triA[size - 1] * alpha[size - 1]
+            cInner[size - 1] = (triF[size - 1] - triA[size - 1] * beta[size - 1]) / lastDenom
+            for (i in size - 2 downTo 0) {
+                cInner[i] = alpha[i + 1] * cInner[i + 1] + beta[i + 1]
             }
         }
-        return clampedX
+
+        val c = FloatArray(n + 1)
+        for (i in 0 until size) {
+            c[i + 1] = cInner[i]
+        }
+
+        val d = FloatArray(n)
+        val b = FloatArray(n)
+        for (i in 0 until n) {
+            d[i] = (c[i + 1] - c[i]) / h[i]
+            b[i] = (a[i + 1] - a[i]) / h[i] - 0.5f * c[i] * h[i] - (1f / 6f) * d[i] * h[i] * h[i]
+        }
+
+        var seg = 0
+        while (seg < n - 1 && sorted[seg + 1].x < clampedX) {
+            seg++
+        }
+
+        val dx = clampedX - sorted[seg].x
+        val y = a[seg] + b[seg] * dx + 0.5f * c[seg] * dx * dx + (1f / 6f) * d[seg] * dx * dx * dx
+        return y.coerceIn(0f, 1f)
     }
 
     companion object {

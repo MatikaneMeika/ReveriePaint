@@ -27,6 +27,7 @@ class StylusDriver(
         HonorStylusAdapter(),
         SamsungStylusAdapter(),
         XiaomiStylusAdapter(),
+        VivoStylusAdapter(),
         GenericStylusAdapter(),
     )
 
@@ -65,6 +66,8 @@ class StylusDriver(
 
     @Volatile
     private var cachedPrimaryBrand: StylusBrand? = null
+    var hasDedicatedActiveStylus: Boolean = false
+        private set
 
     init {
         detectDevices()
@@ -107,6 +110,10 @@ class StylusDriver(
         return getAdapter<XiaomiStylusAdapter>()?.detectModel(context) ?: XiaomiPencilModel.SMART_PEN_2
     }
 
+    fun detectVivoPencilModel(): VivoPencilModel {
+        return getAdapter<VivoStylusAdapter>()?.detectModel(context) ?: VivoPencilModel.VIVO_PENCIL2
+    }
+
     /**
      * Detects brand styluses and sorts them so the connected/supported stylus is pinned on top.
      */
@@ -125,20 +132,40 @@ class StylusDriver(
                 .thenByDescending { it.isCurrentDeviceSupported }
                 .thenByDescending { it.isConnected }
         )
-        cachedPrimaryBrand = detected.firstOrNull()?.brand
+        val primaryDedicated = detected.firstOrNull {
+            it.brand != StylusBrand.GENERIC && it.isCurrentDeviceSupported && it.isConnected
+        } ?: detected.firstOrNull {
+            it.brand != StylusBrand.GENERIC && it.isCurrentDeviceSupported
+        }
+        cachedPrimaryBrand = primaryDedicated?.brand ?: detected.firstOrNull()?.brand
+        hasDedicatedActiveStylus = primaryDedicated != null
         return detected
+    }
+
+    /**
+     * Retrieves the single active adapter for the current platform/hardware.
+     * Prevents cross-brand event leakage (e.g. HUAWEI M-Pencil intercepting Samsung S Pen KeyEvents).
+     */
+    fun getActiveAdapter(): StylusBrandAdapter? {
+        val brand = cachedPrimaryBrand ?: run {
+            val d = detectDevices().firstOrNull()
+            cachedPrimaryBrand = d?.brand
+            d?.brand
+        }
+        if (hasDedicatedActiveStylus && brand != null && brand != StylusBrand.GENERIC) {
+            return getAdapterForBrand(brand)
+        }
+        if (vm.genericStylusEnabled) {
+            return getAdapterForBrand(StylusBrand.GENERIC)
+        }
+        return null
     }
 
     /**
      * Handles generic motion events (e.g. ACTION_SCROLL from stylus barrel slide).
      */
     fun onGenericMotionEvent(event: MotionEvent): Boolean {
-        for (adapter in adapters) {
-            if (adapter.onGenericMotionEvent(event, vm, feedbackManager)) {
-                return true
-            }
-        }
-        return false
+        return getActiveAdapter()?.onGenericMotionEvent(event, vm, feedbackManager) ?: false
     }
 
     /**
@@ -147,12 +174,7 @@ class StylusDriver(
      */
     fun onStylusMotionEvent(event: MotionEvent): Boolean {
         if (onGenericMotionEvent(event)) return true
-        for (adapter in adapters) {
-            if (adapter.onStylusMotionEvent(event, vm, feedbackManager)) {
-                return true
-            }
-        }
-        return false
+        return getActiveAdapter()?.onStylusMotionEvent(event, vm, feedbackManager) ?: false
     }
 
     /**
@@ -160,9 +182,7 @@ class StylusDriver(
      * tracked across hover events (e.g. S Pen side button) is reset safely.
      */
     fun onStylusHoverExited() {
-        for (adapter in adapters) {
-            adapter.onStylusHoverExited(vm, feedbackManager)
-        }
+        getActiveAdapter()?.onStylusHoverExited(vm, feedbackManager)
     }
 
     /**
@@ -181,10 +201,15 @@ class StylusDriver(
             StylusBrand.HONOR_MAGIC_PENCIL -> vm.honorSideButtonErase
             StylusBrand.SAMSUNG_SPEN -> vm.samsungSideButtonErase
             StylusBrand.XIAOMI_STYLUS -> vm.xiaomiSideButtonErase
-            StylusBrand.GENERIC -> vm.genericSideButtonErase
-            else -> vm.huaweiSideButtonErase || vm.honorSideButtonErase || vm.samsungSideButtonErase || vm.xiaomiSideButtonErase || vm.genericSideButtonErase
+            StylusBrand.VIVO_PENCIL -> vm.vivoSideButtonErase
+            StylusBrand.GENERIC -> vm.genericStylusEnabled && vm.genericSideButtonErase
+            else -> vm.huaweiSideButtonErase || vm.honorSideButtonErase || vm.samsungSideButtonErase || vm.xiaomiSideButtonErase || vm.vivoSideButtonErase || (vm.genericStylusEnabled && vm.genericSideButtonErase)
         }
         if (!eraseAllowed) return false
+        val activeAdapter = getActiveAdapter()
+        if (activeAdapter != null && activeAdapter.isSideButtonPressed) {
+            return true
+        }
         val btn = event.buttonState
         return (btn and MotionEvent.BUTTON_STYLUS_PRIMARY) != 0 ||
                 (btn and MotionEvent.BUTTON_PRIMARY) != 0 ||
@@ -200,12 +225,7 @@ class StylusDriver(
         if (!isStylusKeyEvent(event)) {
             return false
         }
-        for (adapter in adapters) {
-            if (adapter.onStylusKeyEvent(event, vm, feedbackManager)) {
-                return true
-            }
-        }
-        return false
+        return getActiveAdapter()?.onStylusKeyEvent(event, vm, feedbackManager) ?: false
     }
 
     private fun isStylusKeyEvent(event: KeyEvent): Boolean {
@@ -214,11 +234,16 @@ class StylusDriver(
             keyCode == KeyEvent.KEYCODE_STYLUS_BUTTON_SECONDARY ||
             keyCode == KeyEvent.KEYCODE_STYLUS_BUTTON_TERTIARY ||
             keyCode == KeyEvent.KEYCODE_STYLUS_BUTTON_TAIL ||
-            keyCode == 304 || keyCode == 305
+            keyCode == KeyEvent.KEYCODE_BUTTON_1 ||
+            keyCode == KeyEvent.KEYCODE_BUTTON_2 ||
+            keyCode == KeyEvent.KEYCODE_BUTTON_3 ||
+            keyCode == 304 || keyCode == 305 ||
+            keyCode == 308 || keyCode == 309 || keyCode == 310
         ) {
             return true
         }
 
+        // 检查输入设备是否为手写笔或蓝牙/星闪笔类
         val src = event.source
         if ((src and android.view.InputDevice.SOURCE_STYLUS) != 0 ||
             (src and android.view.InputDevice.SOURCE_BLUETOOTH_STYLUS) != 0
@@ -226,7 +251,7 @@ class StylusDriver(
             return true
         }
 
-        val dev = event.device
+        val dev = event.device ?: if (event.deviceId > 0) android.view.InputDevice.getDevice(event.deviceId) else null
         if (dev != null) {
             val devSources = dev.sources
             if ((devSources and android.view.InputDevice.SOURCE_STYLUS) != 0 ||
@@ -236,10 +261,22 @@ class StylusDriver(
             }
             val name = dev.name.lowercase()
             if (name.contains("stylus") || name.contains("pen") || name.contains("pencil") ||
-                name.contains("nearlink") || name.contains("starflash") || name.contains("星闪")
+                name.contains("focus") || name.contains("nearlink") || name.contains("starflash") ||
+                name.contains("星闪") || name.contains("cd-mp") || name.contains("mp0")
             ) {
                 return true
             }
+        }
+
+        // 部分厂商 (如华为星闪/蓝牙双击或轻捏) 将快捷键映射为 PAGE_UP / PAGE_DOWN / F19 / F20
+        // 若当前激活了专用手写笔适配器且按键落在这些扩展快捷键范围，允许进入分发
+        if (hasDedicatedActiveStylus && (
+            keyCode == KeyEvent.KEYCODE_PAGE_UP ||
+            keyCode == KeyEvent.KEYCODE_PAGE_DOWN ||
+            keyCode == KeyEvent.KEYCODE_F19 ||
+            keyCode == KeyEvent.KEYCODE_F20
+        )) {
+            return true
         }
 
         return false
@@ -255,6 +292,7 @@ class StylusDriver(
             StylusBrand.SAMSUNG_SPEN -> vm.samsungDoubleClickAction
             StylusBrand.XIAOMI_STYLUS -> vm.xiaomiDoubleTapAction
             StylusBrand.OPPO_ONEPLUS -> vm.oppoDoubleTapAction
+            StylusBrand.VIVO_PENCIL -> vm.vivoDoubleTapAction
             else -> "none"
         }
         if (actionId.trim().equals("none", ignoreCase = true)) return false
@@ -276,7 +314,8 @@ class StylusDriver(
             StylusBrand.HONOR_MAGIC_PENCIL -> vm.honorSingleClickAction
             StylusBrand.SAMSUNG_SPEN -> vm.samsungSingleClickAction
             StylusBrand.XIAOMI_STYLUS -> vm.xiaomiPrimaryButtonAction
-            StylusBrand.GENERIC -> vm.genericPrimaryButtonAction
+            StylusBrand.VIVO_PENCIL -> vm.vivoPrimaryClickAction
+            StylusBrand.GENERIC -> if (vm.genericStylusEnabled) vm.genericPrimaryButtonAction else "none"
             else -> "none"
         }
         if (actionId.trim().equals("none", ignoreCase = true)) return false

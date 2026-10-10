@@ -32,6 +32,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.dp
 import com.reverie.paint.core.*
+import com.reverie.paint.core.stylus.FrontBufferProbe
 import com.reverie.paint.model.Tool
 import com.reverie.paint.ui.theme.Morandi
 import com.reverie.paint.ui.theme.parseColor
@@ -90,6 +91,9 @@ fun CanvasView(
     onFilterHoldingCompare: ((Boolean) -> Unit)? = null,
     /** 双指旋转进入 90° 倍数吸附区时回调 (视觉反馈: 高亮角度 HUD) */
     onRotationSnap: ((Float) -> Unit)? = null,
+
+    /** 供上层拿到 CanvasTouchView 句柄 (速创形状编辑器需要回写画布变换) */
+    onTouchViewReady: (CanvasTouchView) -> Unit = {},
 ) {
     var viewW by remember { mutableStateOf(1) }
     var viewH by remember { mutableStateOf(1) }
@@ -268,10 +272,11 @@ fun CanvasView(
         androidx.compose.ui.viewinterop.AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = { ctx ->
-                CanvasTouchView(ctx).also { touchViewRef = it }
+                CanvasTouchView(ctx).also { touchViewRef = it; onTouchViewReady(it) }
             },
             update = { touchView ->
                 touchViewRef = touchView
+                onTouchViewReady(touchView)
                 @Suppress("UNUSED_VARIABLE")
                 val _lr = layerRev
                 @Suppress("UNUSED_VARIABLE")
@@ -375,6 +380,27 @@ fun CanvasView(
                 update = { overlay ->
                     overlay.targetTouchView = touchViewRef
                 },
+            )
+        }
+
+        if (vm.frontBufferPredictionEnabled && FrontBufferProbe.isSupported()) {
+            androidx.compose.ui.viewinterop.AndroidView(
+                modifier = Modifier.fillMaxSize(),
+                factory = { ctx ->
+                    FrontBufferPreviewOverlay(ctx).also { overlay ->
+                        overlay.targetTouchView = touchViewRef
+                        touchViewRef?.frontBufferOverlay = overlay
+                    }
+                },
+                update = { overlay ->
+                    overlay.targetTouchView = touchViewRef
+                    touchViewRef?.frontBufferOverlay = overlay
+                },
+                onRelease = { overlay ->
+                    overlay.targetTouchView = null
+                    touchViewRef?.frontBufferOverlay = null
+                    overlay.release()
+                }
             )
         }
 

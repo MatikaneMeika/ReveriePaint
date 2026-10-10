@@ -41,8 +41,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
+import com.reverie.paint.ui.components.ReDropdownMenu
+import com.reverie.paint.ui.components.ReDropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -247,6 +247,79 @@ internal fun SettingNavGroupItem(
 }
 
 /**
+ * 单选项卡片 (单选钮 ⊙/○ + 标题 + 副标题，点击整行触发)
+ */
+@Composable
+internal fun SettingRadioGroupItem(
+    title: String,
+    summary: String = "",
+    selected: Boolean,
+    enabled: Boolean = true,
+    shape: RoundedCornerShape = RoundedCornerShape(18.dp),
+    indentStart: Dp = 36.dp,
+    onClick: () -> Unit,
+) {
+    val colors = Theme.current
+    SettingCardBox(
+        shape = shape,
+        onClick = if (enabled) onClick else null,
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .weight(1f)
+                    .then(if (indentStart > 0.dp) Modifier.padding(start = indentStart) else Modifier),
+            ) {
+                // 莫兰迪单选圆环/圆点
+                Box(
+                    modifier = Modifier
+                        .size(18.dp)
+                        .clip(CircleShape)
+                        .border(
+                            width = if (selected) 5.dp else 1.5.dp,
+                            color = if (!enabled) {
+                                colors.subText.copy(alpha = 0.3f)
+                            } else if (selected) {
+                                colors.accent
+                            } else {
+                                colors.subText.copy(alpha = 0.6f)
+                            },
+                            shape = CircleShape,
+                        )
+                        .background(
+                            if (selected) Color.White else Color.Transparent,
+                            shape = CircleShape,
+                        ),
+                )
+                Spacer(Modifier.width(14.dp))
+                Column {
+                    Text(
+                        text = title,
+                        color = if (enabled) colors.text else colors.subText.copy(alpha = 0.5f),
+                        fontSize = 13.5.sp,
+                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                    )
+                    if (summary.isNotBlank()) {
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            text = summary,
+                            color = if (enabled) colors.subText else colors.subText.copy(alpha = 0.4f),
+                            fontSize = 11.5.sp,
+                            lineHeight = 15.sp,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
  * 开关项卡片 (图标 + 标题 + 副标题 + ReSwitch，点击整行触发)
  */
 @Composable
@@ -381,21 +454,25 @@ internal fun SettingDropdownGroupItem(
                     )
                 }
 
-                DropdownMenu(
+                ReDropdownMenu(
                     expanded = expanded,
                     onDismissRequest = { expanded = false },
-                    modifier = Modifier.background(colors.panelHi),
                 ) {
                     options.forEachIndexed { idx, opt ->
-                        DropdownMenuItem(
-                            text = {
-                                Text(
-                                    text = opt,
-                                    color = if (opt == currentText) colors.accent else colors.text,
-                                    fontSize = 13.sp,
-                                    fontWeight = if (opt == currentText) FontWeight.Bold else FontWeight.Normal,
-                                )
-                            },
+                        val isSelected = opt == currentText
+                        ReDropdownMenuItem(
+                            text = opt,
+                            selected = isSelected,
+                            trailingIcon = if (isSelected) {
+                                {
+                                    Icon(
+                                        painter = painterResource(R.drawable.ic_check),
+                                        contentDescription = null,
+                                        tint = colors.accent,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                }
+                            } else null,
                             onClick = {
                                 onSelect(idx)
                                 expanded = false

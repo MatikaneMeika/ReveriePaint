@@ -64,6 +64,7 @@ import androidx.compose.ui.window.DialogProperties
 import com.reverie.paint.ui.components.ReTextButton
 import com.reverie.paint.R
 import com.reverie.paint.ui.components.ReIconButton
+import com.reverie.paint.ui.dialog.RecentAutoSavesDialog
 import com.reverie.paint.core.*
 import com.reverie.paint.model.Project
 import com.reverie.paint.ui.theme.AppColors
@@ -161,6 +162,7 @@ fun HomePage(vm: PaintViewModel) {
     var showBatchDeleteConfirm by remember { mutableStateOf(false) }
 
     var showMoreMenu by remember { mutableStateOf(false) }
+    var showAutoSaveHistoryDialog by remember { mutableStateOf(false) }
 
     val importLauncher =
         rememberLauncherForActivityResult(
@@ -235,6 +237,13 @@ fun HomePage(vm: PaintViewModel) {
                 Toast.makeText(context, String.format(toastStackCreated, name), Toast.LENGTH_SHORT).show()
             },
             onDismiss = { showNewFolderDialog = false },
+        )
+    }
+
+    if (showAutoSaveHistoryDialog) {
+        RecentAutoSavesDialog(
+            vm = vm,
+            onDismiss = { showAutoSaveHistoryDialog = false },
         )
     }
 
@@ -606,6 +615,14 @@ fun HomePage(vm: PaintViewModel) {
                                                             showMoreMenu = false
                                                             newFolderName = defaultFolderName
                                                             showNewFolderDialog = true
+                                                        },
+                                                    )
+                                                    HomeDropdownMenuItem(
+                                                        text = stringResource(R.string.auto_save_history_title),
+                                                        icon = R.drawable.ic_clock,
+                                                        onClick = {
+                                                            showMoreMenu = false
+                                                            showAutoSaveHistoryDialog = true
                                                         },
                                                     )
                                                     HomeDropdownMenuItem(
@@ -1451,19 +1468,10 @@ private fun HomeDropdownMenu(
     modifier: Modifier = Modifier,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    val colors = Theme.current
-    val menuShape = RoundedCornerShape(16.dp)
-    DropdownMenu(
+    com.reverie.paint.ui.components.ReDropdownMenu(
         expanded = expanded,
         onDismissRequest = onDismissRequest,
-        shape = menuShape,
-        containerColor = colors.panelHi.copy(alpha = 0.98f),
-        tonalElevation = 0.dp,
-        shadowElevation = 14.dp,
-        border = BorderStroke(1.dp, colors.border.copy(alpha = 0.7f)),
-        modifier = modifier
-            .widthIn(min = 168.dp)
-            .padding(vertical = 4.dp),
+        modifier = modifier,
         content = content,
     )
 }
@@ -1478,37 +1486,14 @@ private fun HomeDropdownMenuItem(
     textColor: Color? = null,
     iconColor: Color? = null,
 ) {
-    val colors = Theme.current
-    val effectiveTextColor = textColor ?: if (isDestructive) Color(0xFFFF5252) else colors.text
-    val effectiveIconColor = iconColor ?: if (isDestructive) Color(0xFFFF5252) else colors.icon
-
-    DropdownMenuItem(
-        text = {
-            Text(
-                text = text,
-                color = effectiveTextColor,
-                fontSize = 13.5.sp,
-                fontWeight = FontWeight.Medium,
-            )
-        },
+    com.reverie.paint.ui.components.ReDropdownMenuItem(
+        text = text,
         onClick = onClick,
-        leadingIcon = {
-            Icon(
-                painter = painterResource(icon),
-                contentDescription = null,
-                tint = effectiveIconColor,
-                modifier = Modifier.size(18.dp),
-            )
-        },
-        colors = MenuDefaults.itemColors(
-            textColor = effectiveTextColor,
-            leadingIconColor = effectiveIconColor,
-        ),
-        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
-        modifier = modifier
-            .height(40.dp)
-            .padding(horizontal = 6.dp, vertical = 2.dp)
-            .clip(RoundedCornerShape(10.dp)),
+        modifier = modifier,
+        icon = icon,
+        isDestructive = isDestructive,
+        textColor = textColor,
+        iconColor = iconColor,
     )
 }
 

@@ -47,7 +47,8 @@ void writeCommonAttrs(QXmlStreamWriter &w, const ReverieCore::LayerEntry &e)
     }
     w.writeAttribute("locked", e.locked ? "1" : "0");
     w.writeAttribute("alpha_locked", e.alphaLocked ? "1" : "0");
-    w.writeAttribute("inherit_alpha", e.clipped ? "1" : "0");
+    w.writeAttribute("clipped", e.clipped ? "1" : "0");
+    w.writeAttribute("inherit_alpha", e.alphaInherited ? "1" : "0");
     w.writeAttribute("color_label", QString::number(e.colorLabel));
     w.writeAttribute("x", QString::number(node ? int(node->x()) : 0));
     w.writeAttribute("y", QString::number(node ? int(node->y()) : 0));
@@ -124,6 +125,9 @@ void ReverieCore::writeLayersXml(QString *out)
                 const QColor c = (gl->filter() && gl->filter()->getProperty("color", v))
                     ? v.value<QColor>() : QColor(Qt::white);
                 w.writeAttribute("color_argb", QString::number(c.rgba()));
+                if (gl->filter() && gl->filter()->getProperty("pattern_png", v)) {
+                    w.writeAttribute("pattern_png", QString::fromLatin1(v.toByteArray().toBase64()));
+                }
             }
         } else if (e.nodeType == NodeTypeFilterMask) {
             if (KisFilterMask *fm = dynamic_cast<KisFilterMask *>(e.node)) {
@@ -170,9 +174,10 @@ QByteArray readStoreEntryBytes(KoStore *store)
 
 } // namespace
 
-bool ReverieCore::loadLayersXmlTree(const QByteArray &xmlData, KisImageSP image, KoStore *store, bool *bgVisible)
+bool ReverieCore::loadLayersXmlTree(const QByteArray &xmlData, KisImageSP image, KoStore *store, bool *bgVisible, bool *outHealed)
 {
     if (bgVisible) *bgVisible = false;
+    if (outHealed) *outHealed = false;
     if (xmlData.isEmpty() || !image || !store) return false;
 
     QXmlStreamReader r(xmlData);
@@ -204,7 +209,13 @@ bool ReverieCore::loadLayersXmlTree(const QByteArray &xmlData, KisImageSP image,
         node->setX(attrInt("x", 0));
         node->setY(attrInt("y", 0));
         if (KisLayer *l = dynamic_cast<KisLayer *>(node.data())) {
-            l->disableAlphaChannel(a.value("inherit_alpha") == QLatin1String("1"));
+            const bool isClipped = a.value("clipped") == QLatin1String("1");
+            const bool isInherited = a.value("inherit_alpha") == QLatin1String("1");
+            if (isClipped) {
+                l->enableClippingLayer(true);
+            } else if (isInherited) {
+                l->disableAlphaChannel(true);
+            }
             const QString op = a.value("compositeop").toString();
             if (!op.isEmpty()) l->setCompositeOpId(op);
             // alpha_locked 仅颜料层子类支持
@@ -283,9 +294,31 @@ bool ReverieCore::loadLayersXmlTree(const QByteArray &xmlData, KisImageSP image,
                 const QXmlStreamAttributes a = r.attributes();
                 bool okColor = false;
                 const quint32 colorArgb = a.value("color_argb").toUInt(&okColor, 10);
-                KisFilterConfigurationSP gcfg = reverieMakeSolidColorConfig(okColor ? colorArgb : 0xFFFFFFFFu);
-                if (!gcfg) continue;
-                node = new KisGeneratorLayer(image, nodeName, gcfg, nullptr);
+                const auto encodedPattern = a.value("pattern_png");
+                KisFilterConfigurationSP gcfg;
+                if (!encodedPattern.isEmpty() && encodedPattern.size() <= 24 * 1024 * 1024) {
+                    gcfg = reverieMakePatternConfig(QByteArray::fromBase64(encodedPattern.toLatin1()));
+                } else if (encodedPattern.isEmpty()) {
+                    gcfg = reverieMakeSolidColorConfig(okColor ? colorArgb : 0xFFFFFFFFu);
+                }
+                if (gcfg) {
+                    node = new KisGeneratorLayer(image, nodeName, gcfg, nullptr);
+                } else {
+                    // A damaged/oversized pattern must not turn white or leave a partial tree.
+                    // Use the layer's saved raster backup, just like unsupported clone layers.
+                    KisPaintLayerSP fallback = new KisPaintLayer(image, nodeName, 255, cs);
+                    const QString filename = a.value("filename").toString();
+                    if (!filename.isEmpty() && store->open(filename)) {
+                        PendingLayerPixels job;
+                        job.dev = fallback->original();
+                        job.pngBytes = readStoreEntryBytes(store);
+                        job.hasPng = !job.pngBytes.isEmpty();
+                        job.hasData = job.hasPng;
+                        store->close();
+                        loader.stage(job);
+                    }
+                    node = fallback;
+                }
             } else if (name == QLatin1String("clonelayer")) {
                 // v1 限制: 克隆层源关系未序列化, 回退为颜料层保结构
                 const QString fn = r.attributes().value("filename").toString();
@@ -346,7 +379,11 @@ bool ReverieCore::loadLayersXmlTree(const QByteArray &xmlData, KisImageSP image,
     }
     // 树解析完成, 统一并行解码 + 串行写回全部暂存图层
     loader.flush();
-    if (r.hasError()) return false;
+    if (r.hasError()) {
+        qWarning() << "loadLayersXmlTree: XML parsing error:" << r.errorString() << ", retained recovered nodes:" << any;
+        if (outHealed) *outHealed = true;
+        if (!any) return false;
+    }
 
     if (bgVisible) *bgVisible = bg;
     return any;
