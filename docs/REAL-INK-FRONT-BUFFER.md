@@ -28,3 +28,10 @@
 - 草稿 tile 以 OVER 合成在透明底上: 正片叠底等混合模式、湿边/累积与真墨仍有差异。
 - 草稿每次新建 paintop, UI 线程与引擎线程并发只读 preset; 原型阶段, 需真机验证稳定性与耗时
   (PerfTrace `realink.scratch`)。
+
+## 原生构建 (2026-10-10, box 实测可用)
+- Krita 源码: github.com/LanRhyme/krita 分支 `feat/clipping-mask` @ ef7ab16f90 (= reverie-android + 剪切蒙版; 与 third_party/android-native-libs 的 ABI 一致)
+- NDK r25c (25.2.9519653), Qt 6.6.3 android_arm64_v8a + qt5compat (aqtinstall), KF6 v6.6.0 头文件, eigen 3.4.0, lager/zug/immer 头文件, boost/lcms2/expat/png 头文件
+- 生成头: *_export.h (BRUSH_EXPORT/PAINTOP_EXPORT 别名), config-*.h, KoConfig.h (HAVE_OPENEXR 关, USE_LOCK_FREE_HASH_TABLE 开), -DREVERIE_MASKING_FLOAT16=OFF
+- KRITA_BIN_DIR/lib 必须以 third_party/android-native-libs 的 .so 覆盖 krita-android-libs/lib (后者旧, 无剪切 API); -lexpat 用空 libexpat.a 满足
+- 直接 cmake+ninja 编 app/src/main/cpp, llvm-strip --strip-unneeded 后放入 third_party/android-native-libs/libreverie_jni.so, 再 ./gradlew assembleDebug

@@ -256,6 +256,84 @@ object PerfTrace {
     }
 
     /** CanvasTouchView.onDraw 的耗时 (UI 线程) */
+
+    // ------------------------------------------------------------------
+    // 真墨延迟链 (docs/REAL-INK-FRONT-BUFFER.md):
+    //   MotionEvent.eventTime → UI 派发 → 前缓冲投递 → 引擎落墨+渲染完成 → onDraw 结束
+    // 时间基: eventTime 是 uptimeMillis (CLOCK_MONOTONIC), 与 System.nanoTime 同源,
+    // 统一折算为 "距输入事件的毫秒数"。仅 [enabled] 时记录 (纯诊断, 不作功能输入)。
+    // ------------------------------------------------------------------
+    const val INK_DISPATCH = 0
+    const val INK_FRONT = 1
+    const val INK_ENGINE = 2
+    const val INK_DRAWN = 3
+    private const val INK_N = 4
+    private val INK_NAMES = arrayOf("派发", "前缓冲", "引擎", "上屏")
+    private val inkLock = Any()
+    private val inkRing = Array(INK_N) { LongArray(RING) }
+    private val inkSort = LongArray(RING)
+    private val inkIdx = IntArray(INK_N)
+    private val inkCount = IntArray(INK_N)
+
+    /** 引擎已落墨但尚未被 onDraw 画出的最新输入事件时刻 (uptime ms); 0 = 无 */
+    @Volatile
+    private var inkPendingDrawEventMs = 0L
+
+    private fun nowUptimeMicros(): Long = System.nanoTime() / 1000L
+
+    /** 记录 [stage] 距输入事件 [eventTimeMs] 的耗时 */
+    fun inkMark(stage: Int, eventTimeMs: Long) {
+        if (!enabled || eventTimeMs <= 0L || stage !in 0 until INK_N) return
+        val us = nowUptimeMicros() - eventTimeMs * 1000L
+        if (us < 0L || us > 500_000L) return
+        synchronized(inkLock) {
+            inkRing[stage][inkIdx[stage]] = us
+            inkIdx[stage] = (inkIdx[stage] + 1) % RING
+            if (inkCount[stage] < RING) inkCount[stage]++
+        }
+    }
+
+    /** 渲染线程: 一批样本落墨 + renderToBuffer 完成, [eventTimeMs] 为该批最新样本的事件时刻 */
+    fun inkEngineDone(eventTimeMs: Long) {
+        if (!enabled || eventTimeMs <= 0L) return
+        inkMark(INK_ENGINE, eventTimeMs)
+        inkPendingDrawEventMs = eventTimeMs
+    }
+
+    /** UI 线程: onDraw 结束 (位图已录进显示列表), 结清最近一次引擎完成的那批 */
+    fun inkDrawn() {
+        if (!enabled) return
+        val evt = inkPendingDrawEventMs
+        if (evt <= 0L) return
+        inkPendingDrawEventMs = 0L
+        inkMark(INK_DRAWN, evt)
+    }
+
+    /** [stage] 的 p50/p95 (ms, 一位小数); 样本不足返回 null */
+    fun inkPercentilesMs(stage: Int): Pair<Double, Double>? = synchronized(inkLock) {
+        val n = inkCount[stage]
+        if (n < 3) return@synchronized null
+        System.arraycopy(inkRing[stage], 0, inkSort, 0, n)
+        java.util.Arrays.sort(inkSort, 0, n)
+        val p50 = inkSort[((n - 1) * 0.5).toInt()] / 1000.0
+        val p95 = inkSort[((n - 1) * 0.95).toInt()] / 1000.0
+        Pair(p50, p95)
+    }
+
+    private fun appendInkLine(sb: StringBuilder) {
+        sb.append("墨迹(距输入 p50/p95 ms)")
+        for (i in 0 until INK_N) {
+            sb.append(' ').append(INK_NAMES[i]).append(' ')
+            val p = inkPercentilesMs(i)
+            if (p == null) sb.append("--") else sb.append("%.1f/%.1f".format(p.first, p.second))
+        }
+    }
+
+    fun resetInkForTest() = synchronized(inkLock) {
+        for (i in 0 until INK_N) { inkIdx[i] = 0; inkCount[i] = 0 }
+        inkPendingDrawEventMs = 0L
+    }
+
     @Synchronized
     fun drawFrame(nanos: Long) {
         if (!enabled) return
@@ -934,7 +1012,11 @@ object PerfTrace {
         }
         sb.append('\n')
 
-        // 第 3 行: 上一次保存
+        // 第 3 行: 真墨延迟链 (固定行位, 无数据时 "--" 占位)
+        appendInkLine(sb)
+        sb.append('\n')
+
+        // 第 4 行: 上一次保存
         sb.append("save ")
         if (saveTotalMs < 0) {
             sb.append("--")

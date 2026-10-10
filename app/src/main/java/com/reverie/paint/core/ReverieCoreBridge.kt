@@ -479,11 +479,13 @@ object ReverieCoreBridge {
 
     /**
      * 真墨草稿 dab (docs/REAL-INK-FRONT-BUFFER.md): 用当前笔刷完整设置把 [count] 个
-     * 文档坐标样本 ([xy] 交错 x,y) 画到临时设备 (不写图层), 返回直通 alpha 的 RGBA
-     * 字节, [outRect] 写入文档矩形 (x,y,w,h)。不支持 (涂抹/混色/滤镜笔刷) 返回 null。
+     * 文档坐标样本 ([xy] 交错 x,y) 画到临时设备 (不写图层), 返回**预乘** RGBA8888
+     * 字节 (够大时直接写入并返回 [reuse], 否则返回新数组), [outRect] 写入文档矩形
+     * (x,y,w,h)。不支持 (涂抹/混色/滤镜笔刷)、无本笔快照或引擎正持锁时返回 null。
+     * 只读引擎线程在落笔时抓取的预设快照, 不读 UI 线程正在改的预设。
      * 旧版预编译 libreverie_jni.so 没有此符号, 调用方须经 [com.reverie.paint.core.RealInkScratch]。
      */
-    external fun renderScratchDabs(xy: FloatArray, pressure: FloatArray, count: Int, outRect: IntArray): ByteArray?
+    external fun renderScratchDabs(xy: FloatArray, pressure: FloatArray, count: Int, outRect: IntArray, reuse: ByteArray?): ByteArray?
 
     external fun setBrushColor(color: String)
 

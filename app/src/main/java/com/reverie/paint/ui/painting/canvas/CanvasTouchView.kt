@@ -1135,25 +1135,25 @@ class CanvasTouchView(context: Context) : View(context) {
             scratchP[n] = if (v.brushPressureEnabled) touchHistoryP[idx] else 1f
             n++
         }
-        val tile = com.reverie.paint.core.RealInkScratch.render(scratchDocXY, scratchP, n)
-        if (tile == null) {
+        val scratch = com.reverie.paint.core.RealInkScratch
+        if (!scratch.render(scratchDocXY, scratchP, n)) {
             scratchLatch.onFailure()
             return false
         }
         scratchLatch.onSuccess()
         // tile 像素 (0,0)/(w,0)/(0,h) → 文档坐标 → 屏幕坐标, 三点仿射 (含旋转/翻转/缩放)
-        val w = tile.bitmap.width.toFloat()
-        val h = tile.bitmap.height.toFloat()
+        val w = scratch.width.toFloat()
+        val h = scratch.height.toFloat()
         scratchSrcPts[0] = 0f; scratchSrcPts[1] = 0f
         scratchSrcPts[2] = w; scratchSrcPts[3] = 0f
         scratchSrcPts[4] = 0f; scratchSrcPts[5] = h
         for (k in 0 until 3) {
-            viewTransform.docToScreen(tile.docX + scratchSrcPts[k * 2], tile.docY + scratchSrcPts[k * 2 + 1], pointScratch)
+            viewTransform.docToScreen(scratch.docX + scratchSrcPts[k * 2], scratch.docY + scratchSrcPts[k * 2 + 1], pointScratch)
             scratchDstPts[k * 2] = pointScratch[0]
             scratchDstPts[k * 2 + 1] = pointScratch[1]
         }
         scratchMatrix.setPolyToPoly(scratchSrcPts, 0, scratchDstPts, 0, 3)
-        overlay.renderScratchTile(tile.bitmap, scratchMatrix)
+        if (!overlay.renderScratchPixels(scratch.pixels, scratch.width, scratch.height, scratchMatrix)) return false
         PerfTrace.tickNanos("realink.scratch", System.nanoTime() - t0)
         return true
     }
@@ -2375,12 +2375,14 @@ class CanvasTouchView(context: Context) : View(context) {
         }
         if (!PerfHud.enabled) {
             drawCanvas(canvas)
+            PerfTrace.inkDrawn()
             return
         }
         PerfTrace.frameTick()
         val t0 = SystemClock.elapsedRealtimeNanos()
         try {
             drawCanvas(canvas)
+            PerfTrace.inkDrawn()
         } finally {
             PerfHud.recordDraw(SystemClock.elapsedRealtimeNanos() - t0)
             PerfHud.draw(canvas, this)
@@ -4986,6 +4988,7 @@ class CanvasTouchView(context: Context) : View(context) {
                 val fidelityTier = if (frontBufferPrediction) v.effectivePredictionTier else PaintViewModel.PredictionFidelityTier.NONE
 
                 if (frontBufferPrediction && fidelityTier != PaintViewModel.PredictionFidelityTier.NONE) {
+                    PerfTrace.inkMark(PerfTrace.INK_DISPATCH, event.eventTime)
                     // 1. 通用 4 阶卡尔曼滤波器与物理采样训练（前向几何预测时间窗与后台渲染耗时彻底解耦）
                     // 几何外推时间窗上限严格锁定为 MAX_PREDICTION_MS = 32ms (约 1~2 帧)，外推至 2.0 帧呈现前瞻，紧贴笔尖真实落点，防止高速运笔过冲断裂
                     val frameTimeMs = universalPredictor.avgReportRateMs.coerceIn(4f, 16.67f)
@@ -5228,6 +5231,7 @@ class CanvasTouchView(context: Context) : View(context) {
                                     frontBufferOverlay?.renderPreviewPath(previewStrokePath, previewStrokeWidth, previewStrokeColor)
                                 }
                                 drew = true
+                                PerfTrace.inkMark(PerfTrace.INK_FRONT, event.eventTime)
                                 activePredictedTipScreenX = previewTipEndX
                                 activePredictedTipScreenY = previewTipEndY
                                 hasActivePredictedTip = true

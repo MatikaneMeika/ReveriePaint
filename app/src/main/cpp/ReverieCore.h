@@ -935,6 +935,17 @@ public:
         m_dirtyCtx = ctx;
     }
 
+    // Real-ink scratch dabs (docs/REAL-INK-FRONT-BUFFER.md): render the newest
+    // few samples with the FULL current preset into a throw-away device, never
+    // touching any layer. Returns a straight-alpha RGBA8888 tile in document
+    // pixels and its document rect; null image when unsupported (smudge/
+    // colour-mixing ops read layer pixels, no preset, empty result).
+    // Thread-safety: called from the UI thread. It only ever touches the
+    // m_scratch* snapshot (captured on the engine thread when the live stroke
+    // op is created, released in endStrokeBatch) under m_scratchMutex, and
+    // never blocks: if the engine holds the lock it returns a null image.
+    QImage renderScratchDabs(const float *xy, const float *pressure, int count, QRect *outRect);
+
 private:
     void syncLayersFromImage();
     KisPaintDeviceSP currentPaintDevice();
@@ -951,12 +962,6 @@ private:
     bool appendStrokeSample(const QPointF &imgPos, qreal pressure, qreal tiltX = 0.0, qreal tiltY = 0.0, qreal rotation = 0.0, qreal timeSeconds = -1.0);
     void endStrokeBatch();
 
-    // Real-ink scratch dabs (docs/REAL-INK-FRONT-BUFFER.md): render the newest
-    // few samples with the FULL current preset into a throw-away device, never
-    // touching any layer. Returns a straight-alpha RGBA8888 tile in document
-    // pixels and its document rect; null image when unsupported (smudge/
-    // colour-mixing ops read layer pixels, no preset, empty result).
-    QImage renderScratchDabs(const float *xy, const float *pressure, int count, QRect *outRect);
 
     struct StrokeSample {
         QPointF imgPos;
@@ -1167,6 +1172,25 @@ private:
     // Synchronous executor for the async dab-rendering pipeline (Krita uses
     // this in its own tests; on-device it keeps dab rendering deterministic)
     KisFakeRunnableStrokeJobsExecutor m_fakeExecutor;
+
+    // ---- Real-ink scratch snapshot (engine thread writes, UI thread reads) ----
+    void captureScratchSnapshot(const KoColor &color, KisNodeSP node, KisImageSP image,
+                                const QString &compositeOp);
+    void releaseScratchSnapshot();
+    QMutex m_scratchMutex;
+    KisPaintOpPresetSP m_scratchPreset;      // private clone, never the live preset
+    KisNodeSP m_scratchNode;
+    KisImageSP m_scratchImage;
+    const KoColorSpace *m_scratchColorSpace = nullptr;
+    QColor m_scratchColor;
+    QString m_scratchCompositeOp;
+    QRect m_scratchDocBounds;
+    bool m_scratchEligible = false;
+    // Reused for the whole stroke (created lazily on first UI-thread render)
+    KisPaintDeviceSP m_scratchDevice;
+    KisPainter *m_scratchPainter = nullptr;
+    KisPaintOpSP m_scratchOp;
+    KisFakeRunnableStrokeJobsExecutor m_scratchExecutor;
 
     // Stroke batching
     QVector<StrokeSample> m_strokeSamples;

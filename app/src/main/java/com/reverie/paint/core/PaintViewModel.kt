@@ -4513,6 +4513,8 @@ class PaintViewModel : ViewModel() {
                 lastE2ePipelineMs = e2e
             }
             val lastSampleIdx = n - 1
+            // 真墨延迟链: 该批最新样本已落墨并渲染进显示缓冲
+            PerfTrace.inkEngineDone(strokeDrainTimes[lastSampleIdx])
             val lastCoordIdx = lastSampleIdx * STROKE_SAMPLE_STRIDE
             updateRenderedFrontier(
                 strokeDrainCoords[lastCoordIdx],

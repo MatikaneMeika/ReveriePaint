@@ -2570,5 +2570,11 @@
     <string name="crash_recovery_time_prefix">备份时间：%1$s</string>
     <string name="crash_recovery_size_prefix">文件大小：%1$s</string>
     <string name="auto_save_snapshot_meta">%1$d 笔画 · %2$d 图层 · %3$s</string>
+    <string name="settings_low_latency_ink">低延迟笔迹</string>
+    <string name="settings_realink_only_title">真墨模式 (不预测)</string>
+    <string name="settings_realink_only_desc">前缓冲只画真实采样点，关闭全部运动预测，预览不会冲过笔尖</string>
+    <string name="settings_engine_scratch_title">引擎草稿笔迹</string>
+    <string name="settings_engine_scratch_desc">真墨模式下用 Krita 完整笔刷渲染最新一小段，预览与最终笔迹一致（涂抹/混色类笔刷自动退回笔尖戳印）</string>
+    <string name="settings_low_latency_info">修改前缓冲开关后需重新打开画布生效。性能标尺开启时 HUD 会显示「墨迹」行：距输入事件的派发/前缓冲/引擎/上屏耗时。</string>
 </resources>
 

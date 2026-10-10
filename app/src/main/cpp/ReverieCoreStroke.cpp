@@ -642,6 +642,7 @@ bool ReverieCore::flushStrokeBatch()
                         actualOpName);
                 delete m_strokeDistance;
                 m_strokeDistance = new KisDistanceInformation(start, 0.0);
+                captureScratchSnapshot(koColor, KisNodeSP(m_layers[layerIndex].node), image, painterCompOp);
             }
         }
     }
@@ -1007,6 +1008,7 @@ void ReverieCore::endStrokeBatch()
     m_strokeDistance = nullptr;
     m_randomSource.clear();
     m_perStrokeRandomSource.clear();
+    releaseScratchSnapshot();
 }
 
 // ---------------------------------------------------------------------------
@@ -1308,46 +1310,99 @@ bool ReverieCore::strokeAirbrushTick()
 
 
 // ---------------------------------------------------------------------------
-// Real-ink scratch dabs (prototype, see docs/REAL-INK-FRONT-BUFFER.md)
+// Real-ink scratch dabs (see docs/REAL-INK-FRONT-BUFFER.md)
 // ---------------------------------------------------------------------------
-// Called from the UI thread while the engine thread owns the live stroke, so
-// it builds its OWN painter/op/distance on a private device and only reads the
-// preset. Nothing here mutates m_strokeOp, m_strokeDistance or any layer.
-QImage ReverieCore::renderScratchDabs(const float *xy, const float *pressure, int count, QRect *outRect)
+// Threading model:
+//  * captureScratchSnapshot() runs on the ENGINE (render) thread right after
+//    the live stroke op is created, i.e. after per-stroke preset mutations
+//    (eraser mode, size/opacity overrides). It stores a private clone of the
+//    preset plus colour/colour space/target node, so the UI thread never reads
+//    m_brushPreset, m_document or m_layers while the engine paints.
+//  * renderScratchDabs() runs on the UI thread. It only uses the snapshot and
+//    a painter/op/device that are created once per stroke and reused for every
+//    move event (device cleared between calls). It tryLock()s and bails out
+//    instead of blocking the UI thread.
+//  * releaseScratchSnapshot() runs on the engine thread from endStrokeBatch().
+void ReverieCore::captureScratchSnapshot(const KoColor &color, KisNodeSP node, KisImageSP image,
+                                         const QString &compositeOp)
 {
-    if (outRect) *outRect = QRect();
-    if (!xy || !pressure || count < 1 || count > 64) return QImage();
-    if (!m_document || !m_brushPreset || !m_brushPreset->settings()) return QImage();
-    if (m_toolMode == ToolSmudge) return QImage();
+    QMutexLocker lock(&m_scratchMutex);
+    m_scratchOp = nullptr;
+    delete m_scratchPainter;
+    m_scratchPainter = nullptr;
+    m_scratchDevice = nullptr;
+    m_scratchPreset = nullptr;
+    m_scratchEligible = false;
+    if (!m_brushPreset || !m_brushPreset->settings() || !image || !node) return;
+    if (m_toolMode == ToolSmudge) return;
     const QString opId = m_brushPreset->paintOp().id();
     // Ops that sample the layer below cannot be previewed on an empty device.
     if (opId == QLatin1String("colorsmudge") || opId == QLatin1String("deformbrush") ||
         opId == QLatin1String("filter") || opId == QLatin1String("duplicate") ||
         m_brushPreset->hasMaskingPreset()) {
-        return QImage();
+        return;
     }
-    if (m_currentLayer < 0 || m_currentLayer >= m_layers.size() || !m_layers[m_currentLayer].node) {
-        return QImage();
+    m_scratchPreset = m_brushPreset->clone().dynamicCast<KisPaintOpPreset>();
+    if (!m_scratchPreset || !m_scratchPreset->settings()) { m_scratchPreset = nullptr; return; }
+    m_scratchNode = node;
+    m_scratchImage = image;
+    m_scratchColorSpace = image->colorSpace();
+    m_scratchColor = color.toQColor();
+    m_scratchCompositeOp = compositeOp;
+    m_scratchDocBounds = QRect(0, 0, m_docWidth, m_docHeight);
+    m_scratchEligible = true;
+}
+
+void ReverieCore::releaseScratchSnapshot()
+{
+    QMutexLocker lock(&m_scratchMutex);
+    m_scratchOp = nullptr;          // op pins the painter's device: drop first
+    delete m_scratchPainter;
+    m_scratchPainter = nullptr;
+    m_scratchDevice = nullptr;
+    m_scratchPreset = nullptr;
+    m_scratchNode = nullptr;
+    m_scratchImage = nullptr;
+    m_scratchEligible = false;
+}
+
+QImage ReverieCore::renderScratchDabs(const float *xy, const float *pressure, int count, QRect *outRect)
+{
+    if (outRect) *outRect = QRect();
+    if (!xy || !pressure || count < 1 || count > 64) return QImage();
+    if (!m_scratchMutex.tryLock()) return QImage();
+    struct Unlock { QMutex &m; ~Unlock() { m.unlock(); } } unlock{m_scratchMutex};
+    if (!m_scratchEligible || !m_scratchPreset || !m_scratchColorSpace) return QImage();
+
+    if (!m_scratchOp) {
+        m_scratchDevice = new KisPaintDevice(m_scratchColorSpace);
+        m_scratchPainter = new KisPainter(m_scratchDevice);
+        m_scratchPainter->setPaintColor(KoColor(m_scratchColor, m_scratchColorSpace));
+        m_scratchPainter->setFillStyle(KisPainter::FillStyleForegroundColor);
+        m_scratchPainter->setStrokeStyle(KisPainter::StrokeStyleBrush);
+        // Empty device: OVER and the live op's composite are equivalent except
+        // for alpha-darken (non-incremental) which caps at flow; keep that one.
+        m_scratchPainter->setCompositeOpId(m_scratchCompositeOp == QLatin1String("alphadarken")
+                                           ? m_scratchCompositeOp : QString(COMPOSITE_OVER));
+        m_scratchPainter->setOpacityF(1.0);
+        m_scratchPainter->setRunnableStrokeJobsInterface(&m_scratchExecutor);
+        m_scratchOp = KisPaintOpRegistry::instance()->paintOp(
+            m_scratchPreset, m_scratchPainter, m_scratchNode, m_scratchImage);
+        if (!m_scratchOp) {
+            m_scratchEligible = false; // do not retry every event
+            delete m_scratchPainter;
+            m_scratchPainter = nullptr;
+            m_scratchDevice = nullptr;
+            return QImage();
+        }
+    } else {
+        m_scratchDevice->clear();
     }
 
-    KisPaintDeviceSP scratch = new KisPaintDevice(m_document->colorSpace());
-    KisPainter painter(scratch);
-    painter.setPaintColor(KoColor(m_brushColor, scratch->colorSpace()));
-    painter.setFillStyle(KisPainter::FillStyleForegroundColor);
-    painter.setStrokeStyle(KisPainter::StrokeStyleBrush);
-    painter.setCompositeOpId(COMPOSITE_OVER); // blend mode is resolved against real pixels later
-    painter.setOpacityF(1.0);
-    KisFakeRunnableStrokeJobsExecutor executor;
-    painter.setRunnableStrokeJobsInterface(&executor);
-
-    std::unique_ptr<KisPaintOp> op(KisPaintOpRegistry::instance()->paintOp(
-        m_brushPreset, &painter, KisNodeSP(m_layers[m_currentLayer].node), m_document));
-    if (!op) return QImage();
-
-    auto drain = [&op]() {
+    auto drain = [this]() {
         for (int guard = 0; guard < 64; ++guard) {
             QVector<KisRunnableStrokeJobData *> jobs;
-            auto result = op->doAsynchronousUpdate(jobs);
+            auto result = m_scratchOp->doAsynchronousUpdate(jobs);
             for (auto *j : jobs) { j->run(); delete j; }
             if (jobs.isEmpty() || !result.second) break;
         }
@@ -1355,21 +1410,21 @@ QImage ReverieCore::renderScratchDabs(const float *xy, const float *pressure, in
 
     const QPointF start(xy[0], xy[1]);
     KisDistanceInformation distance(start, 0.0);
-    KisPaintInformation first(start, qBound<qreal>(0.0, pressure[0], 1.0));
     if (count == 1) {
-        op->paintAt(first, &distance);
+        KisPaintInformation first(start, qBound<qreal>(0.0, pressure[0], 1.0));
+        m_scratchOp->paintAt(first, &distance);
     } else {
         for (int i = 1; i < count; ++i) {
             KisPaintInformation a(QPointF(xy[2 * (i - 1)], xy[2 * (i - 1) + 1]), qBound<qreal>(0.0, pressure[i - 1], 1.0));
             KisPaintInformation b(QPointF(xy[2 * i], xy[2 * i + 1]), qBound<qreal>(0.0, pressure[i], 1.0));
-            op->paintLine(a, b, &distance);
+            m_scratchOp->paintLine(a, b, &distance);
         }
     }
     drain();
 
-    const QRect bounds = scratch->exactBounds().intersected(QRect(0, 0, m_docWidth, m_docHeight));
+    const QRect bounds = m_scratchDevice->exactBounds().intersected(m_scratchDocBounds);
     if (bounds.isEmpty() || bounds.width() > 2048 || bounds.height() > 2048) return QImage();
-    QImage img = scratch->convertToQImage(nullptr, bounds.x(), bounds.y(), bounds.width(), bounds.height());
+    QImage img = m_scratchDevice->convertToQImage(nullptr, bounds.x(), bounds.y(), bounds.width(), bounds.height());
     if (img.isNull()) return QImage();
     if (outRect) *outRect = bounds;
     return img.convertToFormat(QImage::Format_RGBA8888);

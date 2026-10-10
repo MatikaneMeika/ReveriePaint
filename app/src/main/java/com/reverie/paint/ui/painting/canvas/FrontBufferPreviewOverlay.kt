@@ -50,8 +50,11 @@ class FrontBufferPathPacket(
     var stampCount: Int = 0,
     // ---- 真墨草稿 tile (docs/REAL-INK-FRONT-BUFFER.md) ----
     // 引擎用完整笔刷设置画出的真实像素 (文档坐标), scratchMatrix 为 tile→屏幕变换。
-    // 每次投递新建位图 (原型), GL 线程只读, 不与 UI 线程共享可变像素。
+    // scratchBitmap 非空即本包要画 tile; 位图本身归本包槽位所有 (scratchStore),
+    // 跨事件 reconfigure 复用, 只在 tile 超出容量时重分配。槽位 inFlight 期间 UI
+    // 线程不会再写它 (obtainPacket 只发放空闲槽), 所以无需拷贝。
     var scratchBitmap: Bitmap? = null,
+    var scratchStore: Bitmap? = null,
     val scratchMatrix: android.graphics.Matrix = android.graphics.Matrix(),
 )
 
@@ -283,29 +286,44 @@ class FrontBufferPreviewOverlay @JvmOverloads constructor(
     }
 
     /**
-     * 投递真墨草稿 tile: [bitmap] 为引擎渲染的真实笔刷像素, [tileToScreen] 把 tile
-     * 像素坐标映射到本层屏幕坐标。位图归 GL 线程所有, 调用方不得复用/回收。
+     * 投递真墨草稿 tile: [premulRgba] 前 w*h*4 字节为引擎渲染的预乘 RGBA 像素,
+     * [tileToScreen] 把 tile 像素坐标映射到本层屏幕坐标。像素被拷进空闲槽位自带的
+     * 复用位图 (按需扩容), 调用方随后可立即复用 [premulRgba]。返回是否已投递。
      */
-    fun renderScratchTile(bitmap: Bitmap, tileToScreen: android.graphics.Matrix) {
-        if (!isRendererInitialized) return
+    fun renderScratchPixels(premulRgba: ByteArray, w: Int, h: Int, tileToScreen: android.graphics.Matrix): Boolean {
+        if (!isRendererInitialized || w <= 0 || h <= 0 || premulRgba.size < w * h * 4) return false
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             @Suppress("UNCHECKED_CAST")
             val renderer = frontRenderer as? CanvasFrontBufferedRenderer<FrontBufferPathPacket>
-                ?: return
-            val packet = obtainPacket() ?: return
+                ?: return false
+            val packet = obtainPacket() ?: return false
             try {
-                packet.scratchBitmap = bitmap
+                var bmp = packet.scratchStore
+                if (bmp == null || bmp.isRecycled || bmp.allocationByteCount < w * h * 4) {
+                    // 向上取整到 64, 减少笔刷逐渐变大时的反复重分配
+                    val cw = ((w + 63) / 64) * 64
+                    val ch = ((h + 63) / 64) * 64
+                    bmp?.recycle()
+                    bmp = Bitmap.createBitmap(cw, ch, Bitmap.Config.ARGB_8888)
+                    packet.scratchStore = bmp
+                }
+                if (bmp!!.width != w || bmp.height != h) bmp.reconfigure(w, h, Bitmap.Config.ARGB_8888)
+                bmp.copyPixelsFromBuffer(java.nio.ByteBuffer.wrap(premulRgba, 0, w * h * 4))
+                packet.scratchBitmap = bmp
                 packet.scratchMatrix.set(tileToScreen)
                 packet.stampCount = 0
                 packet.path?.rewind()
                 packet.isClear = false
                 hasContent = true
                 renderer.renderFrontBufferedLayer(packet)
+                return true
             } catch (t: Throwable) {
                 packet.inFlight.set(false)
-                Log.w(TAG, "renderScratchTile error: ${t.message}")
+                Log.w(TAG, "renderScratchPixels error: ${t.message}")
+                return false
             }
         }
+        return false
     }
 
     /**

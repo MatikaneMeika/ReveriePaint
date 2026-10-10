@@ -1,15 +1,18 @@
 package com.reverie.paint.core
 
-import android.graphics.Bitmap
 import android.util.Log
 import com.reverie.paint.model.RealInkPolicy
-import java.nio.ByteBuffer
 
 /**
  * 引擎草稿 dab 的安全封装 (docs/REAL-INK-FRONT-BUFFER.md)。
  *
- * 预编译的 libreverie_jni.so 不含 renderScratchDabs 符号: 首次调用抛
- * [UnsatisfiedLinkError] 后整个进程永久标记不可用, 调用方自动退回 STAMP/折线预览。
+ * - 原生侧只读引擎线程落笔时抓取的预设快照, paintop/设备整笔复用;
+ * - 像素缓冲 [pixels] 跨事件复用 (仅在 tile 变大时扩容), 原生侧直接写预乘 RGBA,
+ *   这里不再逐像素预乘、不再每事件 new Bitmap;
+ * - 旧版 libreverie_jni.so 缺符号时首次 [UnsatisfiedLinkError] 后永久标记不可用,
+ *   调用方自动退回 STAMP/折线预览。
+ *
+ * 仅 UI 线程调用 (共享暂存数组)。
  */
 object RealInkScratch {
     private const val TAG = "RealInkScratch"
@@ -22,48 +25,35 @@ object RealInkScratch {
     private val pressure = FloatArray(RealInkPolicy.MAX_SCRATCH_SAMPLES)
     private val rect = IntArray(4)
 
-    /** 结果: tile 位图 + 文档矩形 (x, y, w, h)。位图归调用方 (交给前缓冲后不得复用)。 */
-    class Tile(val bitmap: Bitmap, val docX: Int, val docY: Int)
+    /** 最近一次结果的预乘 RGBA 像素 (前 [width]*[height]*4 字节有效) */
+    var pixels: ByteArray = ByteArray(64 * 64 * 4)
+        private set
+    var docX = 0; private set
+    var docY = 0; private set
+    var width = 0; private set
+    var height = 0; private set
 
-    /**
-     * 渲染 [count] 个文档坐标样本 ([docXY] 交错 x,y)。不支持/失败返回 null。
-     * 仅 UI 线程调用 (共享暂存数组)。
-     */
-    fun render(docXY: FloatArray, pressures: FloatArray, count: Int): Tile? {
-        if (!nativeAvailable || count <= 0) return null
+    /** 渲染 [count] 个文档坐标样本 ([docXY] 交错 x,y)。成功返回 true 并更新 [pixels]/矩形。 */
+    fun render(docXY: FloatArray, pressures: FloatArray, count: Int): Boolean {
+        if (!nativeAvailable || count <= 0) return false
         val n = count.coerceAtMost(RealInkPolicy.MAX_SCRATCH_SAMPLES)
         docXY.copyInto(xy, 0, 0, n * 2)
         pressures.copyInto(pressure, 0, 0, n)
-        val bytes = try {
-            ReverieCoreBridge.renderScratchDabs(xy, pressure, n, rect)
+        val out = try {
+            ReverieCoreBridge.renderScratchDabs(xy, pressure, n, rect, pixels)
         } catch (e: UnsatisfiedLinkError) {
             nativeAvailable = false
             Log.w(TAG, "renderScratchDabs missing in native lib (prebuilt?), engine scratch disabled")
-            return null
+            return false
         } catch (t: Throwable) {
             Log.w(TAG, "renderScratchDabs failed: ${t.message}")
-            return null
-        } ?: return null
+            return false
+        } ?: return false
         val w = rect[2]
         val h = rect[3]
-        if (w <= 0 || h <= 0 || bytes.size < w * h * 4) return null
-        // 引擎输出直通 alpha RGBA8888; Bitmap 内部为预乘, 这里逐像素预乘 (tile 很小)。
-        premultiplyInPlace(bytes)
-        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-        bmp.copyPixelsFromBuffer(ByteBuffer.wrap(bytes, 0, w * h * 4))
-        return Tile(bmp, rect[0], rect[1])
-    }
-
-    internal fun premultiplyInPlace(rgba: ByteArray) {
-        var i = 0
-        while (i + 3 < rgba.size) {
-            val a = rgba[i + 3].toInt() and 0xFF
-            if (a != 255) {
-                rgba[i] = ((rgba[i].toInt() and 0xFF) * a / 255).toByte()
-                rgba[i + 1] = ((rgba[i + 1].toInt() and 0xFF) * a / 255).toByte()
-                rgba[i + 2] = ((rgba[i + 2].toInt() and 0xFF) * a / 255).toByte()
-            }
-            i += 4
-        }
+        if (w <= 0 || h <= 0 || out.size < w * h * 4) return false
+        pixels = out
+        docX = rect[0]; docY = rect[1]; width = w; height = h
+        return true
     }
 }

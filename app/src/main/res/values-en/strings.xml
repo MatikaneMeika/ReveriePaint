@@ -2570,5 +2570,11 @@
     <string name="crash_recovery_time_prefix">Backup Time: %1$s</string>
     <string name="crash_recovery_size_prefix">File Size: %1$s</string>
     <string name="auto_save_snapshot_meta">%1$d strokes · %2$d layers · %3$s</string>
+    <string name="settings_low_latency_ink">Low-Latency Ink</string>
+    <string name="settings_realink_only_title">Real-ink mode (no prediction)</string>
+    <string name="settings_realink_only_desc">Front buffer draws only real samples; all motion prediction off, preview never overshoots the tip</string>
+    <string name="settings_engine_scratch_title">Engine scratch ink</string>
+    <string name="settings_engine_scratch_desc">In real-ink mode, render the newest segment with the full Krita brush so the preview matches final ink (smudge/mixing brushes fall back to tip stamps)</string>
+    <string name="settings_low_latency_info">Reopen the canvas after changing the front-buffer switch. With the performance HUD on, the "墨迹" row shows dispatch/front-buffer/engine/on-screen time from the input event.</string>
 </resources>
 

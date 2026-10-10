@@ -17,7 +17,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ExitToApp
+import androidx.compose.material.icons.rounded.Brush
+import androidx.compose.material.icons.rounded.Draw
 import androidx.compose.material.icons.rounded.History
+import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.Save
@@ -220,6 +223,42 @@ internal fun GeneralSettingsSubPage(
             }
 
             ReferenceCacheSettings(vm)
+
+            // Section: 低延迟笔迹 (docs/REAL-INK-FRONT-BUFFER.md)
+            SettingCategoryTitle(stringResource(R.string.settings_low_latency_ink))
+            SettingGroup {
+                SettingSwitchGroupItem(
+                    icon = Icons.Rounded.Speed,
+                    title = stringResource(R.string.stylus_front_buffer_prediction_title),
+                    summary = stringResource(R.string.stylus_front_buffer_prediction_desc),
+                    checked = vm.frontBufferPredictionEnabled,
+                    shape = settingGroupShape(0, 3),
+                    onCheckedChange = { vm.updateFrontBufferPredictionEnabled(it) },
+                )
+                SettingSwitchGroupItem(
+                    icon = Icons.Rounded.Draw,
+                    title = stringResource(R.string.settings_realink_only_title),
+                    summary = stringResource(R.string.settings_realink_only_desc),
+                    checked = vm.frontBufferRealInkOnly,
+                    enabled = vm.frontBufferPredictionEnabled,
+                    shape = settingGroupShape(1, 3),
+                    onCheckedChange = { vm.updateFrontBufferRealInkOnly(it) },
+                )
+                SettingSwitchGroupItem(
+                    icon = Icons.Rounded.Brush,
+                    title = stringResource(R.string.settings_engine_scratch_title),
+                    summary = stringResource(R.string.settings_engine_scratch_desc),
+                    checked = vm.frontBufferEngineScratchEnabled,
+                    enabled = vm.frontBufferPredictionEnabled && vm.frontBufferRealInkOnly,
+                    shape = settingGroupShape(2, 3),
+                    onCheckedChange = { vm.updateFrontBufferEngineScratchEnabled(it) },
+                )
+            }
+            Spacer(Modifier.height(10.dp))
+            SettingInfoCard(
+                title = stringResource(R.string.settings_low_latency_ink),
+                text = stringResource(R.string.settings_low_latency_info),
+            )
 
             // Section 4: 诊断 (性能标尺)。debug 构建才有内容, 正式版是空实现 ——
             // 见 [com.reverie.paint.perf.PerfHud]。

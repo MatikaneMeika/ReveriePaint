@@ -488,25 +488,32 @@ Java_com_reverie_paint_core_ReverieCoreBridge_setBrushTexture(JNIEnv *env, jobje
 }
 
 // Real-ink scratch dabs: xy = [x0,y0,x1,y1,...] document coords, outRect =
-// int[4] (x,y,w,h). Returns straight-alpha RGBA bytes (w*h*4) or null.
+// int[4] (x,y,w,h). Writes PREMULTIPLIED RGBA8888 bytes (w*h*4, the layout
+// Bitmap.copyPixelsFromBuffer expects) into `reuse` when it is large enough and
+// returns it; otherwise allocates and returns a bigger array for the caller to
+// keep. Returns null when nothing was rendered (unsupported op, no snapshot,
+// engine busy). Called on the UI thread; see ReverieCore::renderScratchDabs.
 JNIEXPORT jbyteArray JNICALL
 Java_com_reverie_paint_core_ReverieCoreBridge_renderScratchDabs(JNIEnv *env, jobject,
-    jfloatArray xy, jfloatArray pressure, jint count, jintArray outRect)
+    jfloatArray xy, jfloatArray pressure, jint count, jintArray outRect, jbyteArray reuse)
 {
     if (!xy || !pressure || !outRect || count <= 0) return nullptr;
     if (env->GetArrayLength(xy) < count * 2 || env->GetArrayLength(pressure) < count ||
         env->GetArrayLength(outRect) < 4) return nullptr;
-    jfloat *pxy = env->GetFloatArrayElements(xy, nullptr);
-    jfloat *pp = env->GetFloatArrayElements(pressure, nullptr);
+    float pxy[128];
+    float pp[64];
+    const int n = count > 64 ? 64 : count;
+    env->GetFloatArrayRegion(xy, 0, n * 2, pxy);
+    env->GetFloatArrayRegion(pressure, 0, n, pp);
     QRect rect;
-    const QImage img = core()->renderScratchDabs(pxy, pp, count, &rect);
-    env->ReleaseFloatArrayElements(xy, pxy, JNI_ABORT);
-    env->ReleaseFloatArrayElements(pressure, pp, JNI_ABORT);
+    QImage img = core()->renderScratchDabs(pxy, pp, n, &rect);
     if (img.isNull() || rect.isEmpty()) return nullptr;
+    img = img.convertToFormat(QImage::Format_RGBA8888_Premultiplied);
     const jint r[4] = { rect.x(), rect.y(), rect.width(), rect.height() };
     env->SetIntArrayRegion(outRect, 0, 4, r);
     const int rowBytes = rect.width() * 4;
-    jbyteArray out = env->NewByteArray(rowBytes * rect.height());
+    const jsize needed = rowBytes * rect.height();
+    jbyteArray out = (reuse && env->GetArrayLength(reuse) >= needed) ? reuse : env->NewByteArray(needed);
     if (!out) return nullptr;
     for (int y = 0; y < rect.height(); ++y) {
         env->SetByteArrayRegion(out, y * rowBytes, rowBytes,
