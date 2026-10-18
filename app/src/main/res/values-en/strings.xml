@@ -265,6 +265,8 @@
     <string name="settings_lang_en">English</string>
     <string name="settings_general">General</string>
     <string name="settings_general_sub">Auto-save strategy, undo history limit, and exit preferences</string>
+    <string name="settings_category_basic">Preferences</string>
+    <string name="settings_category_storage_perf">Storage &amp; Performance</string>
     <string name="settings_stylus">Stylus Settings</string>
     <string name="settings_nav_stylus_sub">Stylus adaptation, haptic feedback, and global pressure curves</string>
     <string name="settings_author_profile">Creator Profile</string>
@@ -365,6 +367,7 @@
     <string name="tool_smudge">Smudge</string>
     <string name="tool_blur">Blur</string>
     <string name="tool_fill">Fill</string>
+    <string name="tool_enclose_fill">Enclose &amp; Fill</string>
     <string name="tool_gradient">Gradient</string>
     <string name="tool_shapes">Shapes</string>
     <string name="tool_line">Line</string>
@@ -868,6 +871,25 @@
     <string name="quick_color_swap">Swap Colors</string>
     <string name="quick_color_eyedropper">Eyedropper</string>
 
+    <!-- Quick OKLCH Strings -->
+    <string name="tool_quick_oklch">OKLCH Color</string>
+    <string name="quick_oklch_window_title">OKLCH</string>
+    <string name="quick_action_toggle_quick_oklch">OKLCH Color</string>
+    <string name="oklch_view_lc">Slice</string>
+    <string name="oklch_view_wheel">Wheel</string>
+    <string name="oklch_view_sliders">Sliders</string>
+    <string name="oklch_view_lc_desc">Constant Hue L-C Slice</string>
+    <string name="oklch_view_wheel_desc">Perceptual Lightness Wheel</string>
+    <string name="oklch_view_sliders_desc">LCH Precision Sliders</string>
+    <string name="oklch_lightness">Lightness (L)</string>
+    <string name="oklch_chroma">Chroma (C)</string>
+    <string name="oklch_hue">Hue (H)</string>
+    <string name="oklch_saturation">Saturation</string>
+    <string name="oklch_out_of_gamut">Out of Gamut</string>
+    <string name="oklch_gamut_clipped">Clipped to sRGB boundary</string>
+    <string name="oklch_copied">Hex Copied</string>
+    <string name="oklch_direct_input">Enter Precise Value</string>
+
     <!-- Quick Layer Strings -->
     <string name="tool_quick_layer">Quick Layers</string>
     <string name="quick_layer_window_title">Quick Layers</string>
@@ -880,6 +902,7 @@
     <string name="quick_layer_delete">Delete Layer</string>
     <string name="quick_layer_alpha_lock">Lock Alpha</string>
     <string name="quick_layer_empty">No Layers</string>
+    <string name="quick_layer_more_options">More Layer Options</string>
 
     <string name="settings_gesture_pen_hint">Note: Multi-touch gestures work regardless of stylus mode. Two-finger undo and three-finger redo remain available</string>
     <string name="settings_eyedropper_long_press_title">Long Press Eyedropper</string>
@@ -895,6 +918,8 @@
     <string name="settings_eyedropper_speed_highest">Instant</string>
     <string name="settings_eyedropper_offset_title">Eyedropper Offset</string>
     <string name="settings_eyedropper_offset_desc">Offset pick point above finger to prevent blocking view</string>
+    <string name="settings_eyedropper_stylus_in_pen_mode_title">Allow Stylus Long Press to Pick Color in Pen Mode</string>
+    <string name="settings_eyedropper_stylus_in_pen_mode_desc">When disabled, only finger long press picks color in pen mode, stylus long press will not trigger color picking</string>
     <string name="settings_eyedropper_footer_desc">Note: Higher sensitivity triggers faster. Movement tolerance is fixed at 1dp. Seamlessly switches to stylus when stylus mode is active</string>
     <string name="settings_shortcut_dialog_title">Set Shortcut</string>
     <string name="settings_shortcut_press_key">Press a shortcut key...</string>
@@ -1032,6 +1057,9 @@
     <string name="layer_add_paint_layer">Add Paint Layer</string>
     <string name="layer_add_group">Add Layer Group</string>
     <string name="layer_more_types">More Layer Types</string>
+    <string name="layer_menu_section_masks">Masks</string>
+    <string name="layer_menu_section_layers">Layer Types</string>
+    <string name="layer_menu_section_actions">Actions</string>
     <string name="layer_type_fill">Fill Layer</string>
     <string name="layer_type_filter">Filter Layer</string>
     <string name="layer_type_stroke">Stroke Layer</string>
@@ -1043,6 +1071,28 @@
     <string name="layer_tag_fill_prefix">Fill · </string>
     <string name="layer_tag_filter_prefix">Filter · </string>
     <string name="layer_tag_stroke_prefix">Stroke · </string>
+    <string name="layer_tag_mask_prefix">Mask · </string>
+    <string name="layer_op_add_mask">Add Transparency Mask</string>
+    <string name="layer_op_add_selection_mask">Add Local Selection Mask</string>
+    <string name="layer_op_add_filter_mask">Add Filter Mask</string>
+    <string name="layer_op_add_transform_mask">Add Transform Mask</string>
+    <string name="layer_op_remove_mask">Delete Mask</string>
+    <string name="layer_op_invert_mask">Invert Mask</string>
+    <string name="layer_op_apply_mask">Apply Mask to Layer</string>
+    <string name="layer_op_clear_mask">Clear Mask Content</string>
+    <string name="layer_op_activate_selection_mask">Activate as Selection</string>
+    <string name="layer_mask_opacity">Mask Opacity</string>
+    <string name="layer_mask_toast_created">Transparency mask added</string>
+    <string name="layer_mask_toast_selection_created">Local selection mask added</string>
+    <string name="layer_mask_toast_selection_activated">Mask selection activated</string>
+    <string name="layer_mask_toast_inverted">Mask inverted</string>
+    <string name="layer_mask_toast_applied">Mask applied</string>
+    <string name="layer_mask_toast_removed">Mask deleted</string>
+    <string name="layer_mask_toast_cleared">Mask content cleared</string>
+    <string name="layer_mask_toast_no_selection">Create a selection before adding local selection mask</string>
+    <string name="layer_tag_selection_mask_prefix">Selection · </string>
+    <string name="layer_tag_filter_mask_prefix">Filter · </string>
+    <string name="layer_tag_transform_mask_prefix">Transform · </string>
     <string name="layer_stroke_properties">Stroke Properties</string>
     <string name="layer_stroke_size">Stroke Size</string>
     <string name="layer_stroke_color">Stroke Color</string>
@@ -1115,6 +1165,7 @@
     <string name="canvas_toast_fit_reset">Canvas reset to fit screen</string>
     <string name="canvas_toast_group_not_drawable">Cannot paint directly on layer group</string>
     <string name="canvas_toast_filter_not_drawable">Cannot paint directly on filter layer, rasterize first</string>
+    <string name="canvas_toast_selection_mask_not_drawable">Selection mask preserves selection, brush painting is not supported</string>
     <string name="canvas_toast_layer_locked">Layer is locked and cannot be edited</string>
     <string name="canvas_toast_layer_hidden">Layer is hidden and cannot be edited</string>
     <string name="canvas_toast_group_empty">Layer group is empty, cannot transform</string>
@@ -1164,6 +1215,13 @@
     <string name="brush_presets_reload">Reload</string>
     <string name="brush_switch_to_list">Switch to List View</string>
     <string name="brush_switch_to_grid">Switch to Grid View</string>
+    <string name="brush_search_hint">Search brushes</string>
+    <string name="brush_search_placeholder">Search brushes or groups…</string>
+    <string name="brush_search_clear">Clear search</string>
+    <string name="brush_search_empty_title">No brushes found</string>
+    <string name="brush_search_empty_desc">Try searching with different keywords</string>
+    <string name="brush_search_empty_current_group">No matching brushes in this group</string>
+    <string name="brush_search_in_all_count">Search all brushes (%1$d found)</string>
     <string name="brush_empty_fav_title">No Favorite Brushes</string>
     <string name="brush_empty_fav_desc">Tap star on any brush to favorite it</string>
     <string name="brush_empty_recent_title">No Recent Brushes</string>
@@ -1553,6 +1611,16 @@
     <string name="guide_symmetry_rotation">Rotation Angle</string>
     <string name="guide_symmetry_reset_center">Reset Center</string>
     <string name="guide_perspective_ray_density">Ray Density</string>
+    <string name="guide_perspective_mode_3d">3D Grid</string>
+    <string name="guide_perspective_mode_vanish">Vanishing Rays</string>
+    <string name="guide_perspective_3d_hint">Drag on canvas to rotate 3D view; close panel to lock</string>
+    <string name="guide_perspective_pitch">Pitch</string>
+    <string name="guide_perspective_yaw">Yaw</string>
+    <string name="guide_perspective_roll">Camera Roll</string>
+    <string name="guide_perspective_fov">FOV (Focal)</string>
+    <string name="guide_perspective_grid_div">Grid Density</string>
+    <string name="guide_perspective_ground">Ground</string>
+    <string name="guide_perspective_cube">Guide Cube</string>
     <string name="guide_grid_size">Grid Size</string>
     <string name="guide_line_opacity">Guide Opacity</string>
 
@@ -1637,10 +1705,28 @@
     <string name="fill_expand">Expand</string>
     <string name="fill_feather">Feather</string>
     <string name="fill_close_gap">Close Gap</string>
+    <string name="enclose_fill_settings">Enclose &amp; Fill Settings</string>
+    <string name="enclose_fill_mode">Filter Mode</string>
+    <string name="enclose_fill_mode_all">All Regions</string>
+    <string name="enclose_fill_mode_transparent">Transparent Only</string>
+    <string name="enclose_fill_mode_specific_color">Specific Color</string>
+    <string name="enclose_fill_mode_except_specific_color">Exclude Specific Color</string>
+    <string name="enclose_fill_mode_all_short">All</string>
+    <string name="enclose_fill_mode_transparent_short">Transparent</string>
+    <string name="enclose_fill_mode_specific_color_short">Target Color</string>
+    <string name="enclose_fill_mode_except_specific_color_short">Exclude</string>
+    <string name="enclose_fill_include_contour">Include Edge Regions</string>
+    <string name="enclose_fill_target_color">Target Color</string>
+    <string name="enclose_fill_sample">Sample Layers</string>
+    <string name="enclose_fill_sample_current">Current Layer</string>
+    <string name="enclose_fill_sample_all">All Layers</string>
+    <string name="enclose_fill_use_current_color">Use Current Brush Color</string>
 
     <!-- Stylus Settings & Hardware -->
     <string name="stylus_settings_desc">Hardware adaptation, haptic audio and precision pressure mapping</string>
     <string name="stylus_touch_and_cursor">Touch &amp; Cursor</string>
+    <string name="stylus_category_touch_prediction">Touch &amp; Prediction</string>
+    <string name="stylus_category_cursor">Cursor &amp; Crosshair</string>
     <string name="stylus_pen_mode_desc">Disable finger drawing. One finger pans, two fingers zoom and rotate</string>
     <string name="stylus_prediction_title">Ultra-low Latency Prediction</string>
     <string name="stylus_prediction_desc">Reduce stroke latency with OEM hardware SDK or in-app software prediction</string>
@@ -1690,6 +1776,7 @@
     <string name="stylus_cursor_shape_none">None</string>
     <string name="stylus_cursor_shape_system">System</string>
     <string name="stylus_cursor_shape_circle_crosshair">Circle + Crosshair</string>
+    <string name="stylus_cursor_shape_brush_outline">Brush Outline</string>
     <string name="stylus_curve_preset_linear">Linear</string>
     <string name="stylus_curve_preset_soft">Soft Response</string>
     <string name="stylus_curve_preset_hard">Firm Response</string>
@@ -1905,12 +1992,20 @@
     <!-- Theme Settings -->
     <string name="theme_settings_title">Theme Settings</string>
     <string name="theme_settings_subtitle">Global Morandi palette, dark mode, and UI scaling</string>
+    <string name="theme_category_color_appearance">Colors &amp; Theme</string>
+    <string name="theme_category_panels_scale">Panels &amp; Scale</string>
+    <string name="theme_category_workspace_layout">Workspace &amp; Layout</string>
     <string name="theme_category_color_mode">Color &amp; Theme Mode</string>
     <string name="theme_color_mode_title">Color Mode</string>
     <string name="theme_color_mode_summary">Switch between dark/light appearance or follow system</string>
     <string name="theme_mode_dark">Dark</string>
     <string name="theme_mode_light">Light</string>
     <string name="theme_mode_system">Follow System</string>
+    <string name="theme_contrast_title">Interface Contrast</string>
+    <string name="theme_contrast_summary">Adjust contrast level between panels, icons, and text</string>
+    <string name="theme_contrast_soft">Soft</string>
+    <string name="theme_contrast_standard">Standard</string>
+    <string name="theme_contrast_high">High</string>
     <string name="theme_monet_title">Monet Dynamic Color</string>
     <string name="theme_monet_summary">Extract theme colors dynamically from system wallpaper and Material You</string>
     <string name="theme_monet_unsupported">Requires Android 12 or above</string>
@@ -1936,6 +2031,51 @@
     <string name="theme_quick_slider_height_desc">Adjust the length of brush size and opacity sliders in the bottom-left panel</string>
     <string name="theme_left_hand_mode_title">Left-Handed Mode</string>
     <string name="theme_left_hand_mode_desc">Move the tool rail and sliders to the right side of the screen for left-handed drawing</string>
+    <string name="theme_category_layout">Interface Layout</string>
+    <string name="theme_layout_docked">Default Docked Layout</string>
+    <string name="theme_layout_docked_desc">Classic docked layout with tool rails and sliders anchored to screen edges</string>
+    <string name="theme_layout_floating">Floating Mode</string>
+    <string name="theme_layout_floating_desc">Tablet Exclusive: Top bar, tools, and sliders become floating capsules with customizable docking edges</string>
+    <string name="theme_layout_floating_tablet_only">Floating mode is only supported on tablet devices</string>
+    <string name="panel_dock_config_title">Floating Panel Docking</string>
+    <string name="panel_dock_topbar">Top Bar</string>
+    <string name="panel_dock_toolrail">Tool Rail</string>
+    <string name="panel_dock_sliderrail">Slider Panel</string>
+    <string name="panel_edge_top">Top</string>
+    <string name="panel_edge_bottom">Bottom</string>
+    <string name="panel_edge_left">Left</string>
+    <string name="panel_edge_right">Right</string>
+    <string name="panel_align_start">Left / Top</string>
+    <string name="panel_align_center">Center</string>
+    <string name="panel_align_end">Right / Bottom</string>
+    <string name="panel_dock_margin_title">Floating Margin</string>
+    <string name="panel_dock_margin_desc">Adjust the margin of floating capsules from screen edges</string>
+    <string name="panel_dock_scale_title">Floating Panel Scale</string>
+    <string name="panel_dock_scale_desc">Adjust floating capsule size independently from overall UI scale</string>
+    <string name="panel_dock_dialog_title">Floating Layout Setup</string>
+    <string name="panel_dock_preset_default">Standard Left</string>
+    <string name="panel_dock_preset_righthand">Standard Right</string>
+    <string name="panel_dock_preset_bottom">Bottom Dual-Hand</string>
+    <string name="panel_dock_preset_title">Quick Presets</string>
+    <string name="panel_dock_reset">Reset</string>
+    <string name="panel_dock_dialog_tip">Drag panel capsules to dashed slots to dock them</string>
+    <string name="panel_dock_drag_tip">Drag capsule or tap slot to place</string>
+    <string name="floating_tab_layout">Layout &amp; Size</string>
+    <string name="floating_tab_shortcuts">Top Bar Shortcuts</string>
+    <string name="floating_topbar_shortcuts_title">Top Bar Shortcuts</string>
+    <string name="floating_topbar_shortcuts_desc">Add quick action buttons to the floating top bar capsule</string>
+    <string name="floating_topbar_shortcuts_btn">Configure Shortcuts</string>
+    <string name="floating_topbar_shortcuts_count">%1$d shortcut actions added</string>
+    <string name="floating_topbar_shortcuts_empty">No shortcuts added yet. Tap to configure</string>
+    <string name="floating_topbar_shortcuts_add_title">Available Shortcuts</string>
+    <string name="floating_topbar_shortcuts_added_title">Added Shortcuts (Order)</string>
+    <string name="floating_topbar_shortcuts_clear_all">Clear All</string>
+    <string name="floating_topbar_shortcuts_all_added">All available actions have been added</string>
+    <string name="floating_shared_slot_title">Shared Slot &amp; Stacking</string>
+    <string name="floating_shared_slot_desc">Panels in the same position are arranged parallelly inwards</string>
+    <string name="floating_shared_slot_outer">Outer (Edge)</string>
+    <string name="floating_shared_slot_inner">Inner (Inward)</string>
+    <string name="floating_shared_slot_swap">Swap Inner/Outer</string>
     <string name="theme_category_effects">Display &amp; Effects</string>
     <string name="theme_blur_title">Background Frosted Glass Effect</string>
     <string name="theme_blur_desc">Enable translucent background Gaussian blur for all panels and toolbars</string>
@@ -2241,6 +2381,14 @@
     <string name="create_print_size_format">Print size %s</string>
     <string name="create_pixel_size_format">Pixel size %1$d × %2$d px</string>
     <string name="create_layer_warning_low">(Low memory, layers limited)</string>
+    <string name="create_large_canvas_tag">Large Canvas</string>
+    <string name="create_large_canvas_warning_title">Large Canvas Warning</string>
+    <string name="create_large_canvas_warning_desc">Current canvas is large (~%1$d MB per layer). Deep zooming or multiple layers may consume substantial RAM and cause stutter. Please plan dimensions according to device performance</string>
+    <string name="create_large_canvas_dialog_title">Create Large Canvas</string>
+    <string name="create_large_canvas_dialog_desc">Canvas dimension is %1$d × %2$d (~%3$d MB per layer). Drawing and zooming at this size may consume heavy RAM and cause frame drops. Continue creating?</string>
+    <string name="create_large_canvas_dialog_continue">Continue</string>
+    <string name="create_large_canvas_dialog_adjust">Adjust</string>
+    <string name="create_large_canvas_dialog_dont_remind">Don\'t remind again</string>
 
     <!-- Brush UI Modernization & Fine Tuning -->
     <string name="brush_group_basic">Basic Properties</string>
@@ -2570,5 +2718,73 @@
     <string name="crash_recovery_time_prefix">Backup Time: %1$s</string>
     <string name="crash_recovery_size_prefix">File Size: %1$s</string>
     <string name="auto_save_snapshot_meta">%1$d strokes · %2$d layers · %3$s</string>
+
+    <!-- SRT storyboard import -->
+    <string name="srt_import_title">Import SRT storyboard</string>
+    <string name="srt_import_description">Create one keyframe per subtitle in script order, initially one frame long. Drag its right edge to change the duration. Drawing on the SRT track never auto-splits a keyframe. Original timestamps are reference-only. Reimport creates a new track and replaces the reference list; existing drawings are not shortened or deleted. Save as REVP.</string>
+    <string name="srt_choose_file">Choose SRT file</string>
+    <string name="srt_close">Close</string>
+    <string name="srt_layer_name">SRT storyboard</string>
+    <string name="srt_import_success">Storyboard imported. Tap the caption bar to navigate</string>
+    <string name="srt_error_invalid">Invalid SRT: check encoding, caption text and timestamps within 24 hours</string>
+    <string name="srt_error_large">SRT exceeds the limit: 1 MB and 1,000 cues</string>
+    <string name="srt_error_overlap">Subtitle times overlap. Use non-overlapping shots and import again</string>
+    <string name="srt_error_frames">Cues collide on the current frame grid. Increase FPS or adjust timestamps</string>
+    <string name="srt_error_import">Could not import SRT. Check the file and try again</string>
+    <string name="srt_reference_count">Shot %1$d / %2$d · Tap for captions and times</string>
+    <string name="srt_reference_gap">No subtitle at this frame</string>
+    <string name="srt_open_list">Tap to choose a shot</string>
+    <string name="srt_list_title">SRT storyboard · imported at %1$d fps</string>
+    <string name="srt_single_frame_title">SRT storyboard · source times are reference-only</string>
+    <string name="srt_single_frame_hint">Drag the right edge for duration · drawing does not split SRT frames</string>
+    <string name="srt_mapping_changed">Keyframe count changed; caption positioning paused</string>
+
+    <!-- 智能阴影辅助 Shading Assist -->
+    <string name="shading_assist_title">Shading Assist</string>
+    <string name="shading_assist_desc">Intelligent lighting &amp; normal estimation, generates clipped multiply shadow layer</string>
+    <string name="shading_assist_light_source">Light Source &amp; Elevation</string>
+    <string name="shading_assist_azimuth">Azimuth %1$d°</string>
+    <string name="shading_assist_elevation">Elevation %1$d°</string>
+    <string name="shading_assist_mode_cel">Cel Shading</string>
+    <string name="shading_assist_mode_smooth">Smooth</string>
+    <string name="shading_assist_steps_1">1-Step</string>
+    <string name="shading_assist_steps_2">2-Step</string>
+    <string name="shading_assist_threshold">Shadow Coverage</string>
+    <string name="shading_assist_threshold_sub">2nd Step Threshold</string>
+    <string name="shading_assist_softness">Edge Softness</string>
+    <string name="shading_assist_opacity">Shadow Opacity</string>
+    <string name="shading_assist_shadow_color">Shadow Color</string>
+    <string name="shading_assist_lineart_layer">Reference Line Art</string>
+    <string name="shading_assist_lineart_none">None (Base layer only)</string>
+    <string name="shading_assist_lineart_occlusion">Line Art Occlusion (Cast Shadow)</string>
+    <string name="shading_assist_line_cast_dist">Line Art Cast Distance</string>
+    <string name="shading_assist_line_cast_intensity">Line Art Cast Intensity</string>
+    <string name="shading_assist_volume_smoothness">Volume Smoothness</string>
+    <string name="shading_assist_preset_front_left">Front-Left</string>
+    <string name="shading_assist_preset_front_right">Front-Right</string>
+    <string name="shading_assist_preset_top">Top</string>
+    <string name="shading_assist_preset_side">Side</string>
+    <string name="shading_assist_preset_back">Backlight</string>
+    <string name="shading_assist_apply">Generate Shadow Layer</string>
+    <string name="shading_assist_generating">Generating shadow layer...</string>
+    <string name="shading_assist_model_ready">Depth Model Ready</string>
+    <string name="shading_assist_model_download">Download Model (26MB)</string>
+    <string name="shading_assist_model_uninstall">Uninstall Model</string>
+    <string name="shading_assist_model_uninstalled">Model uninstalled</string>
+    <string name="shading_assist_model_card_title">Neural Depth Model</string>
+    <string name="shading_assist_model_status_ready">Ready</string>
+    <string name="shading_assist_model_status_not_downloaded">Not Installed</string>
+    <string name="shading_assist_model_status_downloading">Downloading</string>
+    <string name="shading_assist_model_not_installed">Depth model not installed</string>
+    <string name="shading_assist_model_not_installed_desc">Requires 26MB neural network model to estimate 3D depth and shadows</string>
+    <string name="shading_assist_import_model">Import Local .onnx</string>
+    <string name="shading_assist_downloading">Downloading model (%1$d%%)</string>
+    <string name="shading_assist_custom_model_active">Custom model: %s</string>
+    <string name="shading_assist_reset_model">Reset to Default</string>
+    <string name="shading_assist_layer_name">Smart Shadow</string>
+    <string name="shading_assist_toast_success">Clipped shadow layer generated above base layer</string>
+    <string name="shading_assist_toast_need_layer">Please select a layer with color content first</string>
+    <string name="shading_assist_import_failed">Failed to import custom model</string>
+    <string name="shading_assist_ai_hint">Depth Anything V2 neural network, on-device inference</string>
 </resources>
 

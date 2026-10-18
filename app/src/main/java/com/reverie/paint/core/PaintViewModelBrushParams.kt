@@ -218,7 +218,10 @@ import kotlinx.coroutines.launch
     internal fun PaintViewModel.updateBrushTipAsset(asset: String) {
         brushTipAsset = asset
         saveBrushParam(reloadEngine = true, immediateReload = true)
-        runCore(render = false) { ReverieCoreBridge.setBrushTipAsset(asset) }
+        runCore(render = false) {
+            ReverieCoreBridge.setBrushTipAsset(asset)
+            fetchBrushOutlinePolygons()
+        }
     }
 
     internal fun PaintViewModel.updateBrushPaintOpId(id: String) {
@@ -449,8 +452,18 @@ import kotlinx.coroutines.launch
             if (curve.isNullOrBlank()) continue
             val points = com.reverie.paint.model.DynamicOptionConfig.parseKritaCurve(curve)
             val existing = newMap[key]
+            val isLinear = points.size == 2 &&
+                    points[0].x == 0f && points[0].y == 0f &&
+                    points[1].x == 1f && points[1].y == 1f
+            // 出厂预设中常包含所有通道的 Sensor/curve 节点，但实际压感并未启用。
+            // 只有 Size 默认开启压感；非 Size 通道若为默认线性曲线且无已有启用状态，则默认保持关闭，避免无脑设 enabled = true
+            val isEnabled = if (!key.equals("Size", ignoreCase = true) && isLinear && (id == null || id == "pressure")) {
+                existing?.enabled ?: false
+            } else {
+                existing?.enabled ?: true
+            }
             newMap[key] = (existing ?: com.reverie.paint.model.DynamicOptionConfig(optionKey = key)).copy(
-                enabled = true,
+                enabled = isEnabled,
                 sensorId = id ?: existing?.sensorId ?: "pressure",
                 points = points,
             )
@@ -559,10 +572,7 @@ import kotlinx.coroutines.launch
                     if (brushPresetIndex != targetIdx) return@launch
                     runCore(render = false) {
                         if (brushPresetIndex != targetIdx) return@runCore
-                        // A spacing/size edit may arrive during the debounce without requesting a
-                        // reload. Read the latest immutable snapshot so it is not overwritten here.
                         val pSnapshot = brushParams[name] ?: return@runCore
-                        KppHelper.updateKppFile(kppFile, name, pSnapshot)
                         if (ReverieCoreBridge.loadBrushPreset(targetIdx)) {
                             ReverieCoreBridge.setPresetIsEraser(isEraserPreset)
                             ReverieCoreBridge.setBrushColor(brushColor)
@@ -594,9 +604,15 @@ import kotlinx.coroutines.launch
                                             "flow" -> pSnapshot.pressureFlow
                                             else -> 1.0
                                         }
+                                        val isEnabled = when (opt.lowercase()) {
+                                            "size" -> pSnapshot.pressureEnabled && pSnapshot.pressureSize > 0.001
+                                            "opacity" -> pSnapshot.pressureEnabled && pSnapshot.pressureOpacity > 0.001
+                                            "flow" -> pSnapshot.pressureEnabled && pSnapshot.pressureFlow > 0.001
+                                            else -> brushDynamicOptions[opt]?.enabled ?: true
+                                        }
                                         ReverieCoreBridge.setBrushOptionDynamics(
                                             opt,
-                                            true,
+                                            isEnabled,
                                             sensorId,
                                             curve,
                                             strength,
@@ -628,10 +644,6 @@ import kotlinx.coroutines.launch
                             ReverieCoreBridge.setBrushAirbrush(pSnapshot.airbrush, pSnapshot.airbrushRate)
                         }
                     }
-                }
-            } else {
-                runCore(render = false) {
-                    KppHelper.updateKppFile(kppFile, name, p)
                 }
             }
         }

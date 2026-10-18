@@ -79,12 +79,8 @@ fun QuickActionWindow(
     val haptic = LocalHapticFeedback.current
     val configuration = LocalConfiguration.current
     val density = LocalDensity.current
-    val dm = context.resources.displayMetrics
-    val screenWidthPx = dm.widthPixels.toFloat()
-    val screenHeightPx = dm.heightPixels.toFloat()
-
-    val currentScreenWidthPx by rememberUpdatedState(screenWidthPx)
-    val currentScreenHeightPx by rememberUpdatedState(screenHeightPx)
+    val screenWidthPx = with(density) { configuration.screenWidthDp.dp.toPx() }
+    val screenHeightPx = with(density) { configuration.screenHeightDp.dp.toPx() }
 
     val marginPx = with(density) { 8.dp.toPx() }
 
@@ -134,25 +130,6 @@ fun QuickActionWindow(
         }
     }
 
-    LaunchedEffect(screenWidthPx, screenHeightPx, windowSize, isCollapsed, layoutMode) {
-        val curEffectiveW = if (windowSize.width > 0) windowSize.width.toFloat() else defaultW
-        val curEffectiveH = if (windowSize.height > 0) windowSize.height.toFloat() else defaultH
-        val minX = marginPx
-        val maxX = (screenWidthPx - curEffectiveW - marginPx).coerceAtLeast(minX)
-        val minY = marginPx
-        val maxY = (screenHeightPx - curEffectiveH - marginPx).coerceAtLeast(minY)
-        if (vm.quickActionWindowX >= 0f && vm.quickActionWindowY >= 0f) {
-            val clampedX = vm.quickActionWindowX.coerceIn(minX, maxX)
-            val clampedY = vm.quickActionWindowY.coerceIn(minY, maxY)
-            if (clampedX != vm.quickActionWindowX || clampedY != vm.quickActionWindowY) {
-                vm.quickActionWindowX = clampedX
-                vm.quickActionWindowY = clampedY
-                vm.persistQuickActionsState()
-            }
-        }
-    }
-
-    // 动态圆角：单排为极限胶囊 (CircleShape 或大圆角)，多排为 20dp 圆角矩形，折叠时为小胶囊/圆形
     val windowShape = remember(isCollapsed, layoutMode) {
         if (isCollapsed) {
             RoundedCornerShape(22.dp)
@@ -162,31 +139,21 @@ fun QuickActionWindow(
         }
     }
 
-    DisposableEffect(Unit) {
-        onDispose {
-            vm.quickActionWindowWidth = 0f
-            vm.quickActionWindowHeight = 0f
-        }
-    }
 
     Box(
         modifier = modifier
             .offset {
-                val curEffectiveW = if (windowSize.width > 0) windowSize.width.toFloat() else defaultW
-                val curEffectiveH = if (windowSize.height > 0) windowSize.height.toFloat() else defaultH
-                val minX = marginPx
-                val maxX = (screenWidthPx - curEffectiveW - marginPx).coerceAtLeast(minX)
-                val minY = marginPx
-                val maxY = (screenHeightPx - curEffectiveH - marginPx).coerceAtLeast(minY)
                 val x = if (vm.quickActionWindowX >= 0f) {
-                    vm.quickActionWindowX.coerceIn(minX, maxX).roundToInt()
+                    vm.quickActionWindowX.roundToInt()
                 } else {
-                    ((screenWidthPx - curEffectiveW) / 2f).coerceIn(minX, maxX).roundToInt()
+                    val curW = if (windowSize.width > 0) windowSize.width.toFloat() else defaultW
+                    ((screenWidthPx - curW) / 2f).coerceAtLeast(0f).roundToInt()
                 }
                 val y = if (vm.quickActionWindowY >= 0f) {
-                    vm.quickActionWindowY.coerceIn(minY, maxY).roundToInt()
+                    vm.quickActionWindowY.roundToInt()
                 } else {
-                    ((screenHeightPx - curEffectiveH) / 2f).coerceIn(minY, maxY).roundToInt()
+                    val curH = if (windowSize.height > 0) windowSize.height.toFloat() else defaultH
+                    ((screenHeightPx - curH) / 2f).coerceAtLeast(0f).roundToInt()
                 }
                 IntOffset(x, y)
             }
@@ -198,25 +165,6 @@ fun QuickActionWindow(
                     windowSize = size
                     vm.quickActionWindowWidth = size.width.toFloat()
                     vm.quickActionWindowHeight = size.height.toFloat()
-                    if (size.width > 0 && size.height > 0) {
-                        val minX = marginPx
-                        val maxX = (screenWidthPx - size.width - marginPx).coerceAtLeast(minX)
-                        val minY = marginPx
-                        val maxY = (screenHeightPx - size.height - marginPx).coerceAtLeast(minY)
-                        if (vm.quickActionWindowX < 0f || vm.quickActionWindowY < 0f) {
-                            vm.quickActionWindowX = (maxX / 2f).coerceIn(minX, maxX)
-                            vm.quickActionWindowY = (maxY / 2f).coerceIn(minY, maxY)
-                            vm.persistQuickActionsState()
-                        } else {
-                            val clampedX = vm.quickActionWindowX.coerceIn(minX, maxX)
-                            val clampedY = vm.quickActionWindowY.coerceIn(minY, maxY)
-                            if (clampedX != vm.quickActionWindowX || clampedY != vm.quickActionWindowY) {
-                                vm.quickActionWindowX = clampedX
-                                vm.quickActionWindowY = clampedY
-                                vm.persistQuickActionsState()
-                            }
-                        }
-                    }
                 }
                 .shadow(12.dp, windowShape)
                 .systemHoverIcon(context)
@@ -240,18 +188,22 @@ fun QuickActionWindow(
                     .wrapContentSize()
                     .pointerInput(Unit) {
                         detectDragGestures(
+                            onDragStart = {
+                                val curW = if (windowSize.width > 0) windowSize.width.toFloat() else defaultW
+                                val curH = if (windowSize.height > 0) windowSize.height.toFloat() else defaultH
+                                if (vm.quickActionWindowX < 0f) {
+                                    vm.quickActionWindowX = ((screenWidthPx - curW) / 2f).coerceAtLeast(0f)
+                                }
+                                if (vm.quickActionWindowY < 0f) {
+                                    vm.quickActionWindowY = ((screenHeightPx - curH) / 2f).coerceAtLeast(0f)
+                                }
+                            },
                             onDragEnd = { vm.persistQuickActionsState() },
                             onDragCancel = { vm.persistQuickActionsState() },
                         ) { change, dragAmount ->
                             change.consume()
-                            val curEffectiveW = if (windowSize.width > 0) windowSize.width.toFloat() else defaultW
-                            val curEffectiveH = if (windowSize.height > 0) windowSize.height.toFloat() else defaultH
-                            val curMinX = marginPx
-                            val curMaxX = (currentScreenWidthPx - curEffectiveW - marginPx).coerceAtLeast(curMinX)
-                            val curMinY = marginPx
-                            val curMaxY = (currentScreenHeightPx - curEffectiveH - marginPx).coerceAtLeast(curMinY)
-                            vm.quickActionWindowX = (vm.quickActionWindowX + dragAmount.x).coerceIn(curMinX, curMaxX)
-                            vm.quickActionWindowY = (vm.quickActionWindowY + dragAmount.y).coerceIn(curMinY, curMaxY)
+                            vm.quickActionWindowX += dragAmount.x
+                            vm.quickActionWindowY += dragAmount.y
                         }
                     }
                     .padding(horizontal = 8.dp, vertical = 6.dp),
@@ -324,18 +276,22 @@ fun QuickActionWindow(
                         .height(24.dp)
                         .pointerInput(Unit) {
                             detectDragGestures(
+                                onDragStart = {
+                                    val curW = if (windowSize.width > 0) windowSize.width.toFloat() else defaultW
+                                    val curH = if (windowSize.height > 0) windowSize.height.toFloat() else defaultH
+                                    if (vm.quickActionWindowX < 0f) {
+                                        vm.quickActionWindowX = ((screenWidthPx - curW) / 2f).coerceAtLeast(0f)
+                                    }
+                                    if (vm.quickActionWindowY < 0f) {
+                                        vm.quickActionWindowY = ((screenHeightPx - curH) / 2f).coerceAtLeast(0f)
+                                    }
+                                },
                                 onDragEnd = { vm.persistQuickActionsState() },
                                 onDragCancel = { vm.persistQuickActionsState() },
                             ) { change, dragAmount ->
                                 change.consume()
-                                val curEffectiveW = if (windowSize.width > 0) windowSize.width.toFloat() else defaultW
-                                val curEffectiveH = if (windowSize.height > 0) windowSize.height.toFloat() else defaultH
-                                val curMinX = marginPx
-                                val curMaxX = (currentScreenWidthPx - curEffectiveW - marginPx).coerceAtLeast(curMinX)
-                                val curMinY = marginPx
-                                val curMaxY = (currentScreenHeightPx - curEffectiveH - marginPx).coerceAtLeast(curMinY)
-                                vm.quickActionWindowX = (vm.quickActionWindowX + dragAmount.x).coerceIn(curMinX, curMaxX)
-                                vm.quickActionWindowY = (vm.quickActionWindowY + dragAmount.y).coerceIn(curMinY, curMaxY)
+                                vm.quickActionWindowX += dragAmount.x
+                                vm.quickActionWindowY += dragAmount.y
                             }
                         },
                     verticalAlignment = Alignment.CenterVertically,
@@ -637,7 +593,7 @@ private fun QuickActionButton(
     }
 
     val bg = if (isActivated) Morandi.accent else Morandi.panelHi.copy(alpha = 0.65f)
-    val tint = if (isActivated) Color.White else Morandi.text
+    val tint = if (isActivated) Morandi.onAccent else Morandi.icon
 
     if (showLabel) {
         // 图标 + 文字标签
@@ -664,7 +620,7 @@ private fun QuickActionButton(
             Spacer(Modifier.height(3.dp))
             Text(
                 text = stringResource(action.titleRes),
-                color = if (isActivated) Color.White else Morandi.subText,
+                color = if (isActivated) Morandi.onAccent else Morandi.subText,
                 fontSize = 9.sp,
                 maxLines = 1,
                 textAlign = TextAlign.Center,

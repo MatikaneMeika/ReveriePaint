@@ -34,6 +34,7 @@ enum class Tool(
 
     // Fill family
     FILL("fill", "填充", ToolGroup.FILL),
+    ENCLOSE_FILL("enclose_fill", "圈涂", ToolGroup.FILL),
     GRADIENT("gradient", "渐变", ToolGroup.FILL),
 
     // Shape tools (Krita's shape tools)
@@ -66,13 +67,16 @@ enum class Tool(
     SHORTCUT("shortcut", "快捷操作", ToolGroup.VIEW),
     QUICK_BRUSH("quick_brush", "快捷笔刷", ToolGroup.VIEW),
     QUICK_COLOR("quick_color", "快捷颜色", ToolGroup.VIEW),
+    QUICK_OKLCH("quick_oklch", "OKLCH 调色", ToolGroup.VIEW),
     QUICK_LAYER("quick_layer", "快捷图层", ToolGroup.VIEW),
     SYMMETRY("symmetry", "对称", ToolGroup.OTHER),
     PERSPECTIVE("perspective", "透视", ToolGroup.OTHER),
+    SHADING_ASSIST("shading_assist", "智能阴影 (Beta)", ToolGroup.OTHER),
     ;
 
     companion object {
         fun fromId(id: String): Tool = entries.find { it.id == id } ?: BRUSH
+        fun fromIdOrNull(id: String): Tool? = entries.find { it.id == id }
     }
 }
 
@@ -124,6 +128,31 @@ object LassoSubMode {
     const val FREEHAND = 0
     const val POLYLINE = 1
     const val HYBRID = 2
+}
+
+/** 蒙版类型定义 (对齐 ReverieCore::MaskType) */
+object LayerMaskType {
+    const val TRANSPARENCY = 0
+    const val FILTER = 1
+    const val TRANSFORM = 2
+    const val SELECTION = 3
+}
+
+/** 图层节点类型定义 (对齐 ReverieCore::NodeType) */
+object LayerNodeType {
+    const val PAINT = 0
+    const val GROUP = 1
+    const val FILL = 2
+    const val ADJUSTMENT = 3
+    const val VECTOR = 4
+    const val CLONE = 5
+    const val STROKE = 6
+    const val TRANSPARENCY_MASK = 10
+    const val FILTER_MASK = 11
+    const val TRANSFORM_MASK = 12
+    const val SELECTION_MASK = 13
+
+    fun isMask(nodeType: Int): Boolean = nodeType in 10..13
 }
 
 /** Brush preset: name + default size + softness-ish hint */
@@ -180,3 +209,20 @@ data class AutoSaveSnapshot(
     val thumbPath: String,
     val isEmergency: Boolean = false,
 )
+
+/**
+ * 圈涂 (Enclose and Fill) 区域过滤模式, 映射 Krita 的 KisEncloseAndFillPainter::RegionSelectionMethod
+ */
+enum class EncloseFillRegionMode(
+    val id: Int,
+    val methodValue: Int,
+) {
+    ALL(0, 0), // SelectAllRegions (默认: 仅参考最外层闭合线条，忽略内层线条直接填充整块区域)
+    TRANSPARENT(1, 2), // SelectRegionsFilledWithTransparent (仅透明区域: 细分参考内层线条)
+    SPECIFIC_COLOR(2, 1), // SelectRegionsFilledWithSpecificColor (特定颜色)
+    EXCEPT_SPECIFIC_COLOR(3, 4); // SelectAllRegionsExceptFilledWithSpecificColor (排除特定颜色)
+
+    companion object {
+        fun fromId(id: Int): EncloseFillRegionMode = entries.find { it.id == id } ?: ALL
+    }
+}

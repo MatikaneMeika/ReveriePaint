@@ -230,6 +230,45 @@ class StylusDriver(
 
     private fun isStylusKeyEvent(event: KeyEvent): Boolean {
         val keyCode = event.keyCode
+
+        // 明确排除常规键盘与快捷按键 (字母、数字、F1-F12、控制键、缩放键等)，
+        // 确保外接物理键盘以及数位板 (PenTablet) 的板载快捷键能直接进入全局快捷键管线
+        if (keyCode in KeyEvent.KEYCODE_A..KeyEvent.KEYCODE_Z ||
+            keyCode in KeyEvent.KEYCODE_0..KeyEvent.KEYCODE_9 ||
+            keyCode in KeyEvent.KEYCODE_F1..KeyEvent.KEYCODE_F12 ||
+            keyCode == KeyEvent.KEYCODE_SPACE ||
+            keyCode == KeyEvent.KEYCODE_ENTER ||
+            keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER ||
+            keyCode == KeyEvent.KEYCODE_TAB ||
+            keyCode == KeyEvent.KEYCODE_ESCAPE ||
+            keyCode == KeyEvent.KEYCODE_DEL ||
+            keyCode == KeyEvent.KEYCODE_FORWARD_DEL ||
+            keyCode == KeyEvent.KEYCODE_DPAD_UP ||
+            keyCode == KeyEvent.KEYCODE_DPAD_DOWN ||
+            keyCode == KeyEvent.KEYCODE_DPAD_LEFT ||
+            keyCode == KeyEvent.KEYCODE_DPAD_RIGHT ||
+            keyCode == KeyEvent.KEYCODE_CTRL_LEFT ||
+            keyCode == KeyEvent.KEYCODE_CTRL_RIGHT ||
+            keyCode == KeyEvent.KEYCODE_SHIFT_LEFT ||
+            keyCode == KeyEvent.KEYCODE_SHIFT_RIGHT ||
+            keyCode == KeyEvent.KEYCODE_ALT_LEFT ||
+            keyCode == KeyEvent.KEYCODE_ALT_RIGHT ||
+            keyCode == KeyEvent.KEYCODE_META_LEFT ||
+            keyCode == KeyEvent.KEYCODE_META_RIGHT ||
+            keyCode == KeyEvent.KEYCODE_ZOOM_IN ||
+            keyCode == KeyEvent.KEYCODE_ZOOM_OUT ||
+            keyCode == KeyEvent.KEYCODE_LEFT_BRACKET ||
+            keyCode == KeyEvent.KEYCODE_RIGHT_BRACKET
+        ) {
+            return false
+        }
+
+        // 外接全键盘设备直接放行给全局快捷键系统
+        val dev = event.device ?: if (event.deviceId > 0) android.view.InputDevice.getDevice(event.deviceId) else null
+        if (dev != null && dev.keyboardType == android.view.InputDevice.KEYBOARD_TYPE_ALPHABETIC) {
+            return false
+        }
+
         if (keyCode == KeyEvent.KEYCODE_STYLUS_BUTTON_PRIMARY ||
             keyCode == KeyEvent.KEYCODE_STYLUS_BUTTON_SECONDARY ||
             keyCode == KeyEvent.KEYCODE_STYLUS_BUTTON_TERTIARY ||
@@ -238,7 +277,11 @@ class StylusDriver(
             keyCode == KeyEvent.KEYCODE_BUTTON_2 ||
             keyCode == KeyEvent.KEYCODE_BUTTON_3 ||
             keyCode == 304 || keyCode == 305 ||
-            keyCode == 308 || keyCode == 309 || keyCode == 310
+            keyCode == 308 || keyCode == 309 || keyCode == 310 ||
+            keyCode == KeyEvent.KEYCODE_CAMERA ||
+            keyCode == KeyEvent.KEYCODE_BUTTON_C ||
+            keyCode == KeyEvent.KEYCODE_BUTTON_Z ||
+            keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE
         ) {
             return true
         }
@@ -251,7 +294,6 @@ class StylusDriver(
             return true
         }
 
-        val dev = event.device ?: if (event.deviceId > 0) android.view.InputDevice.getDevice(event.deviceId) else null
         if (dev != null) {
             val devSources = dev.sources
             if ((devSources and android.view.InputDevice.SOURCE_STYLUS) != 0 ||
@@ -260,11 +302,14 @@ class StylusDriver(
                 return true
             }
             val name = dev.name.lowercase()
-            if (name.contains("stylus") || name.contains("pen") || name.contains("pencil") ||
-                name.contains("focus") || name.contains("nearlink") || name.contains("starflash") ||
-                name.contains("星闪") || name.contains("cd-mp") || name.contains("mp0")
-            ) {
-                return true
+            // 排除数位板 (PenTablet / Graphics Tablet) 的按键设备误判为手写笔
+            if (!name.contains("tablet") && !name.contains("pad")) {
+                if (name.contains("stylus") || name.contains("pen") || name.contains("pencil") ||
+                    name.contains("focus") || name.contains("nearlink") || name.contains("starflash") ||
+                    name.contains("星闪") || name.contains("cd-mp") || name.contains("mp0")
+                ) {
+                    return true
+                }
             }
         }
 

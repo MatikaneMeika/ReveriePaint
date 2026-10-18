@@ -27,7 +27,17 @@ internal fun PaintViewModel.projectReferenceBitmap(uri: Uri): Bitmap? =
     referenceImages.getOrNull(referenceAlbumSelectedUris.indexOf(uri))
 
 private fun PaintViewModel.applyReferenceState(state: ReferenceViewState) {
+    val wasOpen = referenceWindowOpen
     referenceWindowOpen = state.open
+    // 参考窗口的画布页/吸色读整图 displayBitmap, 而瓦片路径下它只在面板开着时才拼出来:
+    // 开面板时先排一帧, 免得开面板后到下一次渲染之间看到空白或旧画面。
+    if (state.open && !wasOpen && displayTiles.published != null) {
+        scheduleRender(immediate = true)
+    }
+    // 工程状态恢复 (进入工程 / 重置) 不是用户交互: 同步 wasOpen 抑制 UI 层的
+    // false->true 置中边沿, 面板保持打开进入工程时位置原样保留。
+    // 边沿只允许来自用户交互 (工具栏 toggle / 导入图片自动打开)。
+    referenceWindowWasOpen = state.open
     referenceIsGrayscale = state.grayscale
     referenceIsFlipped = state.flipped
     referenceActiveTab = state.tab
@@ -63,7 +73,8 @@ internal fun PaintViewModel.resetProjectReferences(loading: Boolean = false) {
 internal fun PaintViewModel.persistProjectReferenceState() {
     if (!hasAppContext()) return
     appContext.getSharedPreferences("paint_prefs", 0).edit {
-        putFloat("ref_window_x", referenceWindowX); putFloat("ref_window_y", referenceWindowY)
+        // 位置 (x/y) 不持久化: 面板每次打开都在 UI 层重新居中, 防止上次
+        // 会话拖出屏幕的位置把面板"丢"在屏外
         putFloat("ref_window_w", referenceWindowWidth); putFloat("ref_window_h", referenceWindowHeight)
         putBoolean("ref_allow_rotation", referenceAllowRotation)
     }

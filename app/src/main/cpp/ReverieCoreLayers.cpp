@@ -87,6 +87,10 @@ void currentInsertPosition(const QVector<ReverieCore::LayerEntry> &layers, int c
                 return;
             }
             above = KisNodeSP(e.node);
+            // 蒙版绑定保护: 若当前节点紧邻附着蒙版，新图层必须插入在所有附属蒙版上方
+            while (above->nextSibling() && (above->nextSibling()->property("reverie_is_transparency_mask").toBool() || dynamic_cast<KisMask *>(above->nextSibling().data()))) {
+                above = above->nextSibling();
+            }
             parent = above->parent();
             if (parent) {
                 return;
@@ -363,7 +367,43 @@ int ReverieCore::copyLayer(int index)
 
     KisNodeSP above = KisNodeSP(src.node);
     KisNodeSP parent = above ? above->parent() : KisNodeSP(image->rootLayer());
-    pushUndoCommand(new KisImageLayerAddCommand(image, cloned, parent, above));
+
+    // 检查并收集父图层紧邻附属的所有蒙版
+    QVector<KisNodeSP> attachedMasks;
+    KisNodeSP checkNode = src.node ? src.node->nextSibling() : KisNodeSP();
+    while (checkNode && (checkNode->property("reverie_is_transparency_mask").toBool() || dynamic_cast<KisMask *>(checkNode.data()))) {
+        attachedMasks.append(checkNode);
+        checkNode = checkNode->nextSibling();
+    }
+    if (!attachedMasks.isEmpty()) {
+        above = attachedMasks.last();
+    }
+
+    QVector<KisNodeSP> clonedMasks;
+    for (KisNodeSP srcMask : attachedMasks) {
+        KisNodeSP cMask = srcMask->clone();
+        if (cMask) {
+            cMask->setImage(image);
+            if (srcMask->property("reverie_is_transparency_mask").toBool()) {
+                cMask->setProperty("reverie_is_transparency_mask", true);
+            }
+            cMask->setName(QString("%1 %2").arg(srcMask->name().contains("选区") ? "局部选区" : "蒙版").arg(candidateName));
+            clonedMasks.append(cMask);
+        }
+    }
+
+    if (!clonedMasks.isEmpty()) {
+        beginUndoMacro(QStringLiteral("Copy Layer with Masks"));
+        pushUndoCommand(new KisImageLayerAddCommand(image, cloned, parent, above));
+        KisNodeSP prevMaskNode = cloned;
+        for (KisNodeSP cMask : clonedMasks) {
+            pushUndoCommand(new KisImageLayerAddCommand(image, cMask, parent, prevMaskNode));
+            prevMaskNode = cMask;
+        }
+        endUndoMacro();
+    } else {
+        pushUndoCommand(new KisImageLayerAddCommand(image, cloned, parent, above));
+    }
     recompositeProjection();
     syncLayersFromImage();
     const int idx = indexOfNode(cloned.data());
@@ -594,6 +634,18 @@ void ReverieCore::removeLayer(int index)
         }
     }
 
+    // 若删除的不是蒙版，将其附属的所有蒙版联动一并删除
+    if (e.nodeType < NodeTypeTransparencyMask || e.nodeType > NodeTypeSelectionMask) {
+        KisNode *n = m_layers[index].node;
+        if (n) {
+            KisNodeSP sib = n->nextSibling();
+            while (sib && (sib->property("reverie_is_transparency_mask").toBool() || dynamic_cast<KisMask *>(sib.data()))) {
+                undoCmds.append(new KisImageLayerRemoveCommand(image, sib));
+                sib = sib->nextSibling();
+            }
+        }
+    }
+
     // Krita-native undo: a layer-remove command (undo re-inserts the node)
     undoCmds.append(new KisImageLayerRemoveCommand(image, KisNodeSP(m_layers[index].node)));
     if (undoCmds.size() == 1) {
@@ -622,7 +674,12 @@ void ReverieCore::clearLayer(int index)
     }
     // Krita-native undo: wrap the pixel clear in a transaction
     KisTransaction txn(kundo2_i18n("Clear"), dev);
-    dev->clear();
+    if (m_layers[index].nodeType == NodeTypeTransparencyMask) {
+        // 透明度蒙版清空重置为全白 (Alpha 255, White): 默认全透光无遮罩
+        dev->fill(QRect(0, 0, m_document->width(), m_document->height()), KoColor(Qt::white, m_document->colorSpace()));
+    } else {
+        dev->clear();
+    }
     dev->setDirty();
     if (m_document) {
         txn.commit(m_document->undoAdapter());
@@ -642,6 +699,19 @@ void ReverieCore::setCurrentLayer(int index)
         return;
     }
     m_currentLayer = index;
+    // 切换图层时清理各层可能残留的湿笔高度图，防止常驻内存膨胀与陈旧跨层累积
+    for (const auto &e : m_layers) {
+        if (e.node) {
+            auto dev = e.node->paintDevice();
+            if (dev && dev->interstrokeData()) {
+                KUndo2Command *cmd = dev->createChangeInterstrokeDataCommand(KisInterstrokeDataSP());
+                if (cmd) {
+                    cmd->redo();
+                    delete cmd;
+                }
+            }
+        }
+    }
     if (m_onionSkinActive) {
         // 洋葱皮只渲染当前选中轨道: 换层后把渲染门搬到新层 (旧层擦掉叠影,
         // 新层画出叠影)。笔触洋葱皮缓存按图层索引作 key, 换层后同一索引

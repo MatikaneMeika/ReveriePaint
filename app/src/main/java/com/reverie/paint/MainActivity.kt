@@ -418,6 +418,18 @@ class MainActivity : ComponentActivity() {
             if (vm.immersiveMode) {
                 applyImmersive(true, vm.extendToCutout)
             }
+            val dm = resources.displayMetrics
+            val density = dm.density
+            val screenW = if (newConfig.screenWidthDp > 0) newConfig.screenWidthDp * density else dm.widthPixels.toFloat()
+            val screenH = if (newConfig.screenHeightDp > 0) newConfig.screenHeightDp * density else dm.heightPixels.toFloat()
+            val isLand = newConfig.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE ||
+                (newConfig.orientation == android.content.res.Configuration.ORIENTATION_UNDEFINED && screenW > screenH)
+            vm.handleOrientationChange(
+                newIsLandscape = isLand,
+                screenWidthPx = screenW,
+                screenHeightPx = screenH,
+                density = density,
+            )
         }
     }
 
@@ -471,7 +483,8 @@ class MainActivity : ComponentActivity() {
         val vm = currentViewModel
         if (vm != null) {
             val driver = vm.stylusDriver ?: vm.getOrCreateStylusDriver(this)
-            if (driver.onStylusKeyEvent(event)) {
+            // 录制快捷键状态下放行全部硬件按键 (含数位板/手写笔侧键)，使按键录制对话框能正常捕获
+            if (!vm.isShortcutRecordingActive && driver.onStylusKeyEvent(event)) {
                 return true
             }
             if (vm.currentPage == com.reverie.paint.core.Page.PAINTING) {
@@ -531,20 +544,13 @@ fun ReverieApp(vm: PaintViewModel = viewModel()) {
         targetState = vm.currentPage,
         transitionSpec = {
             if (targetState == Page.PAINTING) {
-                // Expanding smoothly into canvas from gallery
-                (
-                    androidx.compose.animation.fadeIn(
-                        androidx.compose.animation.core
-                            .tween(280, easing = androidx.compose.animation.core.FastOutSlowInEasing),
-                    ) +
-                        androidx.compose.animation.scaleIn(
-                            initialScale = 0.88f,
-                            animationSpec =
-                                androidx.compose.animation.core.spring(
-                                    dampingRatio = androidx.compose.animation.core.Spring.DampingRatioNoBouncy,
-                                    stiffness = androidx.compose.animation.core.Spring.StiffnessMediumLow,
-                                ),
-                        )
+                // 进入画布只做一次短淡入, 不再 scaleIn(0.88f): 对含 setZOrderOnTop(true) 的
+                // FrontBufferPreviewOverlay (SurfaceView + CanvasFrontBufferedRenderer) 的父容器做
+                // 弹簧缩放时, 首笔前缓冲 HardwareBuffer 按缩放中的尺寸创建, 真机上观察到首笔笔迹
+                // 折行裂成几块 (抬笔 commit() 重建缓冲后恢复)。
+                androidx.compose.animation.fadeIn(
+                    androidx.compose.animation.core
+                        .tween(160, easing = androidx.compose.animation.core.FastOutSlowInEasing),
                 ).togetherWith(
                     androidx.compose.animation.fadeOut(
                         androidx.compose.animation.core

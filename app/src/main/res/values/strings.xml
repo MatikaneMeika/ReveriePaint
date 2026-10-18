@@ -265,6 +265,8 @@
     <string name="settings_lang_en">English</string>
     <string name="settings_general">通用设置</string>
     <string name="settings_general_sub">自动保存策略、撤销历史步数与退出偏好</string>
+    <string name="settings_category_basic">基础偏好</string>
+    <string name="settings_category_storage_perf">存储与性能</string>
     <string name="settings_stylus">手写笔设置</string>
     <string name="settings_nav_stylus_sub">专属手写笔适配、书写震动发声与全局压力曲线</string>
     <string name="settings_author_profile">作者档案</string>
@@ -365,6 +367,7 @@
     <string name="tool_smudge">混合涂抹</string>
     <string name="tool_blur">模糊</string>
     <string name="tool_fill">填充</string>
+    <string name="tool_enclose_fill">圈涂</string>
     <string name="tool_gradient">渐变</string>
     <string name="tool_shapes">形状</string>
     <string name="tool_line">直线</string>
@@ -868,6 +871,25 @@
     <string name="quick_color_swap">交换前背景色</string>
     <string name="quick_color_eyedropper">吸管取色</string>
 
+    <!-- Quick OKLCH Strings -->
+    <string name="tool_quick_oklch">OKLCH 调色</string>
+    <string name="quick_oklch_window_title">OKLCH</string>
+    <string name="quick_action_toggle_quick_oklch">OKLCH 调色</string>
+    <string name="oklch_view_lc">切片</string>
+    <string name="oklch_view_wheel">色轮</string>
+    <string name="oklch_view_sliders">滑块</string>
+    <string name="oklch_view_lc_desc">L-C 恒定色相切片</string>
+    <string name="oklch_view_wheel_desc">恒定感知明度色轮</string>
+    <string name="oklch_view_sliders_desc">LCH 精密三联滑块</string>
+    <string name="oklch_lightness">明度 (L)</string>
+    <string name="oklch_chroma">彩度 (C)</string>
+    <string name="oklch_hue">色相 (H)</string>
+    <string name="oklch_saturation">饱和度</string>
+    <string name="oklch_out_of_gamut">超色域</string>
+    <string name="oklch_gamut_clipped">已裁切至 sRGB 边界</string>
+    <string name="oklch_copied">已复制色值</string>
+    <string name="oklch_direct_input">输入精确数值</string>
+
     <!-- Quick Layer Strings -->
     <string name="tool_quick_layer">快捷图层</string>
     <string name="quick_layer_window_title">快捷图层</string>
@@ -880,6 +902,7 @@
     <string name="quick_layer_delete">删除图层</string>
     <string name="quick_layer_alpha_lock">锁定透明度</string>
     <string name="quick_layer_empty">暂无图层</string>
+    <string name="quick_layer_more_options">更多图层操作</string>
 
     <string name="settings_gesture_pen_hint">提示：多指触控手势不受笔模式影响，手写笔模式下依然可以直接使用双指撤销与三指重做</string>
     <string name="settings_eyedropper_long_press_title">长按画布吸色</string>
@@ -895,6 +918,8 @@
     <string name="settings_eyedropper_speed_highest">极速</string>
     <string name="settings_eyedropper_offset_title">取色点偏移</string>
     <string name="settings_eyedropper_offset_desc">取色位置偏移到手指上方，避免手指遮挡中心点</string>
+    <string name="settings_eyedropper_stylus_in_pen_mode_title">笔模式下允许手写笔长按取色</string>
+    <string name="settings_eyedropper_stylus_in_pen_mode_desc">关闭后在笔模式下仅允许手指长按取色，手写笔长按不触发取色</string>
     <string name="settings_eyedropper_footer_desc">说明：灵敏度越高，长按触发时间越短；移动容差固定为 1dp（移动超过即不触发），笔模式开启时，长按取色由手指触控无缝转换为手写笔长按</string>
     <string name="settings_shortcut_dialog_title">设置快捷键</string>
     <string name="settings_shortcut_press_key">请按下快捷键...</string>
@@ -1032,6 +1057,9 @@
     <string name="layer_add_paint_layer">添加颜料图层</string>
     <string name="layer_add_group">添加图层组</string>
     <string name="layer_more_types">更多图层类型</string>
+    <string name="layer_menu_section_masks">蒙版</string>
+    <string name="layer_menu_section_layers">图层类型</string>
+    <string name="layer_menu_section_actions">快捷生成</string>
     <string name="layer_type_fill">填充图层</string>
     <string name="layer_type_filter">滤镜图层</string>
     <string name="layer_type_stroke">描边图层</string>
@@ -1043,6 +1071,28 @@
     <string name="layer_tag_fill_prefix">填充 · </string>
     <string name="layer_tag_filter_prefix">滤镜 · </string>
     <string name="layer_tag_stroke_prefix">描边 · </string>
+    <string name="layer_tag_mask_prefix">蒙版 · </string>
+    <string name="layer_op_add_mask">添加透明度蒙版</string>
+    <string name="layer_op_add_selection_mask">添加局部选区蒙版</string>
+    <string name="layer_op_add_filter_mask">添加滤镜蒙版</string>
+    <string name="layer_op_add_transform_mask">添加变换蒙版</string>
+    <string name="layer_op_remove_mask">删除蒙版</string>
+    <string name="layer_op_invert_mask">反向蒙版</string>
+    <string name="layer_op_apply_mask">应用蒙版至图层</string>
+    <string name="layer_op_clear_mask">清空蒙版内容</string>
+    <string name="layer_op_activate_selection_mask">激活并载入选区</string>
+    <string name="layer_mask_opacity">蒙版不透明度</string>
+    <string name="layer_mask_toast_created">已添加透明度蒙版</string>
+    <string name="layer_mask_toast_selection_created">已添加局部选区蒙版</string>
+    <string name="layer_mask_toast_selection_activated">已激活蒙版选区</string>
+    <string name="layer_mask_toast_inverted">已反向蒙版</string>
+    <string name="layer_mask_toast_applied">已应用蒙版</string>
+    <string name="layer_mask_toast_removed">已删除蒙版</string>
+    <string name="layer_mask_toast_cleared">已清空蒙版内容</string>
+    <string name="layer_mask_toast_no_selection">请先创建选区后再添加局部选区蒙版</string>
+    <string name="layer_tag_selection_mask_prefix">选区 · </string>
+    <string name="layer_tag_filter_mask_prefix">滤镜 · </string>
+    <string name="layer_tag_transform_mask_prefix">变换 · </string>
     <string name="layer_stroke_properties">描边属性</string>
     <string name="layer_stroke_size">描边粗细</string>
     <string name="layer_stroke_color">描边颜色</string>
@@ -1115,6 +1165,7 @@
     <string name="canvas_toast_fit_reset">画布已平滑满屏复位</string>
     <string name="canvas_toast_group_not_drawable">图层组不可直接绘制，请选择组内图层</string>
     <string name="canvas_toast_filter_not_drawable">滤镜图层不可直接绘制，请在普通图层绘制或栅格化</string>
+    <string name="canvas_toast_selection_mask_not_drawable">局部选区蒙版用于保存选区，不可直接使用笔刷绘制</string>
     <string name="canvas_toast_layer_locked">图层已锁定，无法编辑</string>
     <string name="canvas_toast_layer_hidden">图层已隐藏，无法编辑</string>
     <string name="canvas_toast_group_empty">图层组为空，无法进行变换</string>
@@ -1164,6 +1215,13 @@
     <string name="brush_presets_reload">重新载入</string>
     <string name="brush_switch_to_list">切换为列表视图</string>
     <string name="brush_switch_to_grid">切换为网格视图</string>
+    <string name="brush_search_hint">搜索笔刷</string>
+    <string name="brush_search_placeholder">搜索笔刷名称或分组…</string>
+    <string name="brush_search_clear">清空搜索</string>
+    <string name="brush_search_empty_title">未找到相关笔刷</string>
+    <string name="brush_search_empty_desc">尝试使用其他关键词搜索</string>
+    <string name="brush_search_empty_current_group">当前分组未找到相关笔刷</string>
+    <string name="brush_search_in_all_count">在全部笔刷中搜索（共 %1$d 项）</string>
     <string name="brush_empty_fav_title">暂无常用笔刷</string>
     <string name="brush_empty_fav_desc">点击笔刷星标即可加入常用</string>
     <string name="brush_empty_recent_title">暂无最近使用记录</string>
@@ -1553,6 +1611,16 @@
     <string name="guide_symmetry_rotation">旋转角度</string>
     <string name="guide_symmetry_reset_center">重置居中</string>
     <string name="guide_perspective_ray_density">参考线密度</string>
+    <string name="guide_perspective_mode_3d">3D 空间网格</string>
+    <string name="guide_perspective_mode_vanish">传统灭点射线</string>
+    <string name="guide_perspective_3d_hint">在画布上滑动可自由旋转视角，关闭面板即固定参考</string>
+    <string name="guide_perspective_pitch">俯仰角 (Pitch)</string>
+    <string name="guide_perspective_yaw">偏航角 (Yaw)</string>
+    <string name="guide_perspective_roll">倾斜角度 (Roll)</string>
+    <string name="guide_perspective_fov">透视焦距 (FOV)</string>
+    <string name="guide_perspective_grid_div">地面网格密度</string>
+    <string name="guide_perspective_ground">地面网格</string>
+    <string name="guide_perspective_cube">立体立方体</string>
     <string name="guide_grid_size">网格尺寸</string>
     <string name="guide_line_opacity">参考线不透明度</string>
 
@@ -1637,10 +1705,28 @@
     <string name="fill_expand">拓展</string>
     <string name="fill_feather">羽化</string>
     <string name="fill_close_gap">空隙</string>
+    <string name="enclose_fill_settings">圈涂设置</string>
+    <string name="enclose_fill_mode">过滤模式</string>
+    <string name="enclose_fill_mode_all">全部区域</string>
+    <string name="enclose_fill_mode_transparent">仅透明区域</string>
+    <string name="enclose_fill_mode_specific_color">特定颜色</string>
+    <string name="enclose_fill_mode_except_specific_color">排除特定颜色</string>
+    <string name="enclose_fill_mode_all_short">全部</string>
+    <string name="enclose_fill_mode_transparent_short">透明</string>
+    <string name="enclose_fill_mode_specific_color_short">指定色</string>
+    <string name="enclose_fill_mode_except_specific_color_short">排除色</string>
+    <string name="enclose_fill_include_contour">包含边缘连通区</string>
+    <string name="enclose_fill_target_color">目标颜色</string>
+    <string name="enclose_fill_sample">采样图层</string>
+    <string name="enclose_fill_sample_current">当前图层</string>
+    <string name="enclose_fill_sample_all">所有图层</string>
+    <string name="enclose_fill_use_current_color">使用当前画笔色</string>
 
     <!-- Stylus Settings & Hardware -->
     <string name="stylus_settings_desc">手写笔硬件级适配、触感音效与高精度压感映射</string>
     <string name="stylus_touch_and_cursor">触控与光标</string>
+    <string name="stylus_category_touch_prediction">触控与笔画预测</string>
+    <string name="stylus_category_cursor">光标与准星指示</string>
     <string name="stylus_pen_mode_desc">开启后禁止手指绘制，单指可平移画布，双指可缩放与旋转画布</string>
     <string name="stylus_prediction_title">超低延迟笔迹预测</string>
     <string name="stylus_prediction_desc">降低运笔跟手延迟，支持选择硬件厂商 SDK 或软件自研算法</string>
@@ -1690,6 +1776,7 @@
     <string name="stylus_cursor_shape_none">无</string>
     <string name="stylus_cursor_shape_system">系统指针</string>
     <string name="stylus_cursor_shape_circle_crosshair">圆+十字准星</string>
+    <string name="stylus_cursor_shape_brush_outline">笔刷轮廓</string>
     <string name="stylus_curve_preset_linear">标准线性</string>
     <string name="stylus_curve_preset_soft">轻压灵敏 (凸)</string>
     <string name="stylus_curve_preset_hard">用力扎实 (凹)</string>
@@ -1905,12 +1992,20 @@
     <!-- Theme Settings -->
     <string name="theme_settings_title">主题设置</string>
     <string name="theme_settings_subtitle">全局莫兰迪调色盘、暗黑模式与界面视觉缩放</string>
+    <string name="theme_category_color_appearance">色彩与主题</string>
+    <string name="theme_category_panels_scale">面板与尺寸</string>
+    <string name="theme_category_workspace_layout">工作区与布局</string>
     <string name="theme_category_color_mode">色彩与主题模式</string>
     <string name="theme_color_mode_title">色彩模式</string>
     <string name="theme_color_mode_summary">深浅色外观切换或跟随系统自动感知</string>
     <string name="theme_mode_dark">深色</string>
     <string name="theme_mode_light">浅色</string>
     <string name="theme_mode_system">跟随系统</string>
+    <string name="theme_contrast_title">界面对比度</string>
+    <string name="theme_contrast_summary">调整面板底色、图标及文字的明暗反差等级</string>
+    <string name="theme_contrast_soft">柔和</string>
+    <string name="theme_contrast_standard">标准</string>
+    <string name="theme_contrast_high">清晰</string>
     <string name="theme_monet_title">莫奈取色 (Monet 动态色彩)</string>
     <string name="theme_monet_summary">跟随系统壁纸与 Material You 动态提取界面主题色</string>
     <string name="theme_monet_unsupported">需要 Android 12 及以上系统支持</string>
@@ -1936,6 +2031,51 @@
     <string name="theme_quick_slider_height_desc">调整绘画界面左下角笔刷大小与不透明度滑块的长度</string>
     <string name="theme_left_hand_mode_title">左手作画模式</string>
     <string name="theme_left_hand_mode_desc">将快捷工具栏与滑块停靠至屏幕右侧，便于左手执笔绘图</string>
+    <string name="theme_category_layout">界面布局</string>
+    <string name="theme_layout_docked">默认贴边布局</string>
+    <string name="theme_layout_docked_desc">经典停靠布局，工具栏和滑块贴边停靠</string>
+    <string name="theme_layout_floating">自由悬浮模式</string>
+    <string name="theme_layout_floating_desc">平板专属：顶栏、工具栏与滑块转为悬浮胶囊，可自由指定停靠边缘</string>
+    <string name="theme_layout_floating_tablet_only">自由悬浮模式仅在平板设备上支持</string>
+    <string name="panel_dock_config_title">悬浮面板停靠配置</string>
+    <string name="panel_dock_topbar">顶部栏 (TopBar)</string>
+    <string name="panel_dock_toolrail">工具栏 (Tools)</string>
+    <string name="panel_dock_sliderrail">滑块面板 (Sliders)</string>
+    <string name="panel_edge_top">顶部</string>
+    <string name="panel_edge_bottom">底部</string>
+    <string name="panel_edge_left">左侧</string>
+    <string name="panel_edge_right">右侧</string>
+    <string name="panel_align_start">靠左 / 靠上</string>
+    <string name="panel_align_center">居中</string>
+    <string name="panel_align_end">靠右 / 靠下</string>
+    <string name="panel_dock_margin_title">悬浮边距</string>
+    <string name="panel_dock_margin_desc">调整所有悬浮胶囊距离屏幕边缘的内边距</string>
+    <string name="panel_dock_scale_title">悬浮面板大小</string>
+    <string name="panel_dock_scale_desc">独立调整悬浮胶囊的缩放尺寸，不受全局界面大小影响</string>
+    <string name="panel_dock_dialog_title">悬浮面板布局调整</string>
+    <string name="panel_dock_preset_default">标准左手</string>
+    <string name="panel_dock_preset_righthand">标准右手</string>
+    <string name="panel_dock_preset_bottom">双手环绕底栏</string>
+    <string name="panel_dock_preset_title">快捷排布预设</string>
+    <string name="panel_dock_reset">恢复默认</string>
+    <string name="panel_dock_dialog_tip">拖拽面板胶囊到目标虚线槽位即可完成停靠</string>
+    <string name="panel_dock_drag_tip">拖拽或点击槽位放置胶囊</string>
+    <string name="floating_tab_layout">布局与尺寸</string>
+    <string name="floating_tab_shortcuts">顶部快捷栏</string>
+    <string name="floating_topbar_shortcuts_title">顶部栏快捷功能</string>
+    <string name="floating_topbar_shortcuts_desc">在悬浮顶部栏胶囊中添加常用快捷动作按钮</string>
+    <string name="floating_topbar_shortcuts_btn">配置快捷功能</string>
+    <string name="floating_topbar_shortcuts_count">已添加 %1$d 项快捷动作</string>
+    <string name="floating_topbar_shortcuts_empty">暂未添加快捷动作，点击配置添加</string>
+    <string name="floating_topbar_shortcuts_add_title">可添加的快捷动作</string>
+    <string name="floating_topbar_shortcuts_added_title">已添加的快捷动作（上下调整顺序）</string>
+    <string name="floating_topbar_shortcuts_clear_all">清空全部</string>
+    <string name="floating_topbar_shortcuts_all_added">已添加全部可用动作</string>
+    <string name="floating_shared_slot_title">槽位共享与层级</string>
+    <string name="floating_shared_slot_desc">同位置面板将向画布内侧平行并列排布</string>
+    <string name="floating_shared_slot_outer">外侧（贴边）</string>
+    <string name="floating_shared_slot_inner">内侧（并排）</string>
+    <string name="floating_shared_slot_swap">交换内外顺序</string>
     <string name="theme_category_effects">显示与效果</string>
     <string name="theme_blur_title">背景毛玻璃效果</string>
     <string name="theme_blur_desc">为所有面板与工具栏启用半透明背景高斯模糊</string>
@@ -2241,6 +2381,14 @@
     <string name="create_print_size_format">打印尺寸 %s</string>
     <string name="create_pixel_size_format">像素尺寸 %1$d × %2$d px</string>
     <string name="create_layer_warning_low">（内存偏低，图层受限）</string>
+    <string name="create_large_canvas_tag">超大画幅</string>
+    <string name="create_large_canvas_warning_title">超大画幅性能提示</string>
+    <string name="create_large_canvas_warning_desc">当前画布尺寸较大（单图层约 %1$d MB），大幅缩放或多图层绘制可能消耗较多运存并出现卡顿，建议根据绘制需求合理规划画幅</string>
+    <string name="create_large_canvas_dialog_title">超大画布创建提醒</string>
+    <string name="create_large_canvas_dialog_desc">当前画幅尺寸为 %1$d × %2$d（单图层约 %3$d MB），在此尺寸下进行高倍缩放或绘制可能占用较多系统运存并产生卡顿，是否确认继续创建？</string>
+    <string name="create_large_canvas_dialog_continue">继续创建</string>
+    <string name="create_large_canvas_dialog_adjust">返回调整</string>
+    <string name="create_large_canvas_dialog_dont_remind">不再提醒</string>
 
     <!-- Brush UI Modernization & Fine Tuning -->
     <string name="brush_group_basic">核心基础</string>
@@ -2570,5 +2718,73 @@
     <string name="crash_recovery_time_prefix">备份时间：%1$s</string>
     <string name="crash_recovery_size_prefix">文件大小：%1$s</string>
     <string name="auto_save_snapshot_meta">%1$d 笔画 · %2$d 图层 · %3$s</string>
+
+    <!-- SRT storyboard import -->
+    <string name="srt_import_title">导入 SRT 分镜</string>
+    <string name="srt_import_description">每条字幕按顺序生成一个关键帧，默认长度为 1 帧，可拖动帧格右边缘调整时长；SRT 轨道绘画不会自动切分关键帧；原始时间码只作参考，不决定帧的位置或长度；重新导入会新增轨道并替换字幕参考，不压缩或删除已有画面；请保存为 REVP 工程</string>
+    <string name="srt_choose_file">选择 SRT 文件</string>
+    <string name="srt_close">关闭</string>
+    <string name="srt_layer_name">SRT 分镜</string>
+    <string name="srt_import_success">SRT 分镜已导入，点击字幕栏可跳转分镜</string>
+    <string name="srt_error_invalid">SRT 格式无效：请检查编码、字幕正文及 24 小时内的起止时间</string>
+    <string name="srt_error_large">SRT 超过限制：最多 1 MB、1000 条字幕</string>
+    <string name="srt_error_overlap">字幕时间重叠，请调整为不重叠的分镜后重新导入</string>
+    <string name="srt_error_frames">字幕在当前帧率下发生帧冲突，请提高帧率或调整字幕时间</string>
+    <string name="srt_error_import">无法导入 SRT，请检查文件并重试</string>
+    <string name="srt_reference_count">分镜 %1$d / %2$d · 点击查看字幕与时间</string>
+    <string name="srt_reference_gap">当前处于字幕间隙</string>
+    <string name="srt_open_list">点击选择分镜</string>
+    <string name="srt_list_title">SRT 分镜 · 导入帧率 %1$d fps</string>
+    <string name="srt_single_frame_title">SRT 分镜 · 原始时间仅供参考</string>
+    <string name="srt_single_frame_hint">拖右边缘调时长 · SRT 轨道绘画不切帧</string>
+    <string name="srt_mapping_changed">关键帧数量已改变，字幕定位暂停</string>
+
+    <!-- 智能阴影辅助 Shading Assist -->
+    <string name="shading_assist_title">智能阴影</string>
+    <string name="shading_assist_desc">根据光源方向与表面法线，自动生成正片叠底剪贴阴影图层</string>
+    <string name="shading_assist_light_source">光源方向与仰角</string>
+    <string name="shading_assist_azimuth">方位角 %1$d°</string>
+    <string name="shading_assist_elevation">仰角 %1$d°</string>
+    <string name="shading_assist_mode_cel">赛璐珞</string>
+    <string name="shading_assist_mode_smooth">柔和过渡</string>
+    <string name="shading_assist_steps_1">单阶阴影</string>
+    <string name="shading_assist_steps_2">双阶阴影</string>
+    <string name="shading_assist_threshold">阴影覆盖范围</string>
+    <string name="shading_assist_threshold_sub">二阶深色阈值</string>
+    <string name="shading_assist_softness">边缘平滑度</string>
+    <string name="shading_assist_opacity">阴影不透明度</string>
+    <string name="shading_assist_shadow_color">阴影色彩</string>
+    <string name="shading_assist_lineart_layer">参考线稿图层</string>
+    <string name="shading_assist_lineart_none">不参考线稿 (仅底色)</string>
+    <string name="shading_assist_lineart_occlusion">线稿投射自遮挡</string>
+    <string name="shading_assist_line_cast_dist">线稿投射距离</string>
+    <string name="shading_assist_line_cast_intensity">线稿投射强度</string>
+    <string name="shading_assist_volume_smoothness">体积平滑度</string>
+    <string name="shading_assist_preset_front_left">前左侧光</string>
+    <string name="shading_assist_preset_front_right">前右侧光</string>
+    <string name="shading_assist_preset_top">正顶光</string>
+    <string name="shading_assist_preset_side">正侧光</string>
+    <string name="shading_assist_preset_back">逆光</string>
+    <string name="shading_assist_apply">生成阴影图层</string>
+    <string name="shading_assist_generating">正在生成阴影图层...</string>
+    <string name="shading_assist_model_ready">深度模型已就绪</string>
+    <string name="shading_assist_model_download">下载模型 (26MB)</string>
+    <string name="shading_assist_model_uninstall">卸载模型</string>
+    <string name="shading_assist_model_uninstalled">模型已卸载</string>
+    <string name="shading_assist_model_card_title">深度神经网络模型</string>
+    <string name="shading_assist_model_status_ready">已就绪</string>
+    <string name="shading_assist_model_status_not_downloaded">未安装</string>
+    <string name="shading_assist_model_status_downloading">下载中</string>
+    <string name="shading_assist_model_not_installed">深度模型未下载</string>
+    <string name="shading_assist_model_not_installed_desc">需要 26MB 神经网络模型以生成 3D 深度与智能光影</string>
+    <string name="shading_assist_import_model">导入本地 .onnx</string>
+    <string name="shading_assist_downloading">正在下载推荐模型 (%1$d%%)</string>
+    <string name="shading_assist_custom_model_active">自定义模型: %s</string>
+    <string name="shading_assist_reset_model">恢复默认模型</string>
+    <string name="shading_assist_layer_name">智能阴影</string>
+    <string name="shading_assist_toast_success">已在底色图层上方生成剪贴阴影</string>
+    <string name="shading_assist_toast_need_layer">请先选择包含色彩内容的图层</string>
+    <string name="shading_assist_import_failed">导入自定义模型失败</string>
+    <string name="shading_assist_ai_hint">Depth Anything V2 深度神经网络，离线端侧推理</string>
 </resources>
 

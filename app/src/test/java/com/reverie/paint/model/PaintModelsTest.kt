@@ -53,6 +53,23 @@ class PaintModelsTest {
     }
 
     @Test
+    fun `enclose fill tool belongs to FILL group`() {
+        assertEquals(ToolGroup.FILL, Tool.ENCLOSE_FILL.group)
+        assertEquals(Tool.ENCLOSE_FILL, Tool.fromId("enclose_fill"))
+    }
+
+    @Test
+    fun `enclose fill region modes map correctly to Krita selection methods`() {
+        assertEquals(0, EncloseFillRegionMode.ALL.methodValue)
+        assertEquals(2, EncloseFillRegionMode.TRANSPARENT.methodValue)
+        assertEquals(1, EncloseFillRegionMode.SPECIFIC_COLOR.methodValue)
+        assertEquals(4, EncloseFillRegionMode.EXCEPT_SPECIFIC_COLOR.methodValue)
+        assertEquals(EncloseFillRegionMode.ALL, EncloseFillRegionMode.fromId(0))
+        assertEquals(EncloseFillRegionMode.TRANSPARENT, EncloseFillRegionMode.fromId(1))
+        assertEquals(EncloseFillRegionMode.ALL, EncloseFillRegionMode.fromId(999))
+    }
+
+    @Test
     fun `lasso segment undo pops points by segment count`() {
         val points = mutableListOf(10 to 10, 20 to 20, 21 to 21, 22 to 22, 30 to 30)
         val segmentCounts = mutableListOf(1, 3, 1) // Tap (1), Drag (3), Tap (1)
@@ -166,5 +183,44 @@ class PaintModelsTest {
         assertEquals(halfW, brOverlayX, 1e-3f)
         assertEquals(halfH, brOverlayY, 1e-3f)
     }
+
+    @Test
+    fun `floating ui popupInwardMarginDp avoids shared slot panels`() {
+        val slot = PanelPosition(PanelEdge.LEFT, PanelAlignment.CENTER)
+        // 场景 1: 单个面板停靠在左侧 (scale=1.0, 胶囊厚度~41dp, 呼吸间隙 14dp)
+        val singleConfig = FloatingUiConfig(
+            marginDp = 12,
+            scale = 1.0f,
+            toolRailPosition = slot,
+            sliderRailPosition = PanelPosition(PanelEdge.LEFT, PanelAlignment.END),
+            topBarPosition = PanelPosition(PanelEdge.TOP, PanelAlignment.CENTER),
+        )
+        // 12 + round(0 + 36 * 1.13 + 14) = 12 + 55 = 67
+        assertEquals(67, singleConfig.popupInwardMarginDp(slot))
+
+        // 场景 2: 两个面板共用同一槽位并排 (ToolRail + SliderRail 都在左侧中心)
+        val sharedConfig = FloatingUiConfig(
+            marginDp = 12,
+            scale = 1.0f,
+            toolRailPosition = slot,
+            sliderRailPosition = slot,
+            topBarPosition = PanelPosition(PanelEdge.TOP, PanelAlignment.CENTER),
+        )
+        // 避让 1 层垂直向内平移 (48 * 1.13): 12 + round(48 * 1.13 + 36 * 1.13 + 14) = 12 + 109 = 121
+        assertEquals(121, sharedConfig.popupInwardMarginDp(slot))
+
+        // 场景 3: 水平槽位共享 (TopBar + ToolRail 都在顶部中心)
+        val topSlot = PanelPosition(PanelEdge.TOP, PanelAlignment.CENTER)
+        val horizontalSharedConfig = FloatingUiConfig(
+            marginDp = 10,
+            scale = 1.0f,
+            topBarPosition = topSlot,
+            toolRailPosition = topSlot,
+            sliderRailPosition = PanelPosition(PanelEdge.LEFT, PanelAlignment.CENTER),
+        )
+        // 避让 1 层水平向内平移 (46 * 1.13): 10 + round(46 * 1.13 + 36 * 1.13 + 14) = 10 + 107 = 117
+        assertEquals(117, horizontalSharedConfig.popupInwardMarginDp(topSlot))
+    }
 }
+
 

@@ -44,6 +44,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -104,17 +105,14 @@ fun QuickColorWindow(
 ) {
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
+    val configuration = LocalConfiguration.current
     val density = LocalDensity.current
 
     val isCollapsed = vm.quickColorCollapsed
     var windowSize by remember { mutableStateOf(IntSize.Zero) }
 
-    val dm = context.resources.displayMetrics
-    val screenWidthPx = dm.widthPixels.toFloat()
-    val screenHeightPx = dm.heightPixels.toFloat()
-
-    val currentScreenWidthPx by rememberUpdatedState(screenWidthPx)
-    val currentScreenHeightPx by rememberUpdatedState(screenHeightPx)
+    val screenWidthPx = with(density) { configuration.screenWidthDp.dp.toPx() }
+    val screenHeightPx = with(density) { configuration.screenHeightDp.dp.toPx() }
 
     val marginPx = with(density) { 8.dp.toPx() }
     val defaultW = with(density) { if (isCollapsed) 48.dp.toPx() else 212.dp.toPx() }
@@ -148,35 +146,10 @@ fun QuickColorWindow(
         vm.updateBrushColor(hex)
     }
 
-    // 屏幕尺寸变化时的出界夹紧
-    LaunchedEffect(screenWidthPx, screenHeightPx, windowSize, isCollapsed) {
-        val curEffectiveW = if (windowSize.width > 0) windowSize.width.toFloat() else defaultW
-        val curEffectiveH = if (windowSize.height > 0) windowSize.height.toFloat() else defaultH
-        val minX = marginPx
-        val maxX = (screenWidthPx - curEffectiveW - marginPx).coerceAtLeast(minX)
-        val minY = marginPx
-        val maxY = (screenHeightPx - curEffectiveH - marginPx).coerceAtLeast(minY)
-        if (vm.quickColorWindowX >= 0f && vm.quickColorWindowY >= 0f) {
-            val clampedX = vm.quickColorWindowX.coerceIn(minX, maxX)
-            val clampedY = vm.quickColorWindowY.coerceIn(minY, maxY)
-            if (clampedX != vm.quickColorWindowX || clampedY != vm.quickColorWindowY) {
-                vm.quickColorWindowX = clampedX
-                vm.quickColorWindowY = clampedY
-                vm.persistQuickColorState()
-            }
-        }
-    }
-
     val windowShape = remember(isCollapsed) {
         if (isCollapsed) CircleShape else RoundedCornerShape(16.dp)
     }
 
-    DisposableEffect(Unit) {
-        onDispose {
-            vm.quickColorWindowWidth = 0f
-            vm.quickColorWindowHeight = 0f
-        }
-    }
 
     val parsedCurrentColor = remember(vm.brushColor) {
         try {
@@ -197,21 +170,17 @@ fun QuickColorWindow(
     Box(
         modifier = modifier
             .offset {
-                val curEffectiveW = if (windowSize.width > 0) windowSize.width.toFloat() else defaultW
-                val curEffectiveH = if (windowSize.height > 0) windowSize.height.toFloat() else defaultH
-                val minX = marginPx
-                val maxX = (screenWidthPx - curEffectiveW - marginPx).coerceAtLeast(minX)
-                val minY = marginPx
-                val maxY = (screenHeightPx - curEffectiveH - marginPx).coerceAtLeast(minY)
                 val x = if (vm.quickColorWindowX >= 0f) {
-                    vm.quickColorWindowX.coerceIn(minX, maxX).roundToInt()
+                    vm.quickColorWindowX.roundToInt()
                 } else {
-                    ((screenWidthPx - curEffectiveW) / 2f).coerceIn(minX, maxX).roundToInt()
+                    val curW = if (windowSize.width > 0) windowSize.width.toFloat() else defaultW
+                    ((screenWidthPx - curW) / 2f).coerceAtLeast(0f).roundToInt()
                 }
                 val y = if (vm.quickColorWindowY >= 0f) {
-                    vm.quickColorWindowY.coerceIn(minY, maxY).roundToInt()
+                    vm.quickColorWindowY.roundToInt()
                 } else {
-                    ((screenHeightPx - curEffectiveH) / 2f).coerceIn(minY, maxY).roundToInt()
+                    val curH = if (windowSize.height > 0) windowSize.height.toFloat() else defaultH
+                    ((screenHeightPx - curH) / 2f).coerceAtLeast(0f).roundToInt()
                 }
                 IntOffset(x, y)
             }
@@ -222,25 +191,6 @@ fun QuickColorWindow(
                     windowSize = size
                     vm.quickColorWindowWidth = size.width.toFloat()
                     vm.quickColorWindowHeight = size.height.toFloat()
-                    if (size.width > 0 && size.height > 0) {
-                        val minX = marginPx
-                        val maxX = (screenWidthPx - size.width - marginPx).coerceAtLeast(minX)
-                        val minY = marginPx
-                        val maxY = (screenHeightPx - size.height - marginPx).coerceAtLeast(minY)
-                        if (vm.quickColorWindowX < 0f || vm.quickColorWindowY < 0f) {
-                            vm.quickColorWindowX = (maxX / 2f).coerceIn(minX, maxX)
-                            vm.quickColorWindowY = (maxY / 2f).coerceIn(minY, maxY)
-                            vm.persistQuickColorState()
-                        } else {
-                            val clampedX = vm.quickColorWindowX.coerceIn(minX, maxX)
-                            val clampedY = vm.quickColorWindowY.coerceIn(minY, maxY)
-                            if (clampedX != vm.quickColorWindowX || clampedY != vm.quickColorWindowY) {
-                                vm.quickColorWindowX = clampedX
-                                vm.quickColorWindowY = clampedY
-                                vm.persistQuickColorState()
-                            }
-                        }
-                    }
                 }
                 .shadow(16.dp, windowShape, spotColor = Color.Black.copy(alpha = 0.5f))
                 .systemHoverIcon(context)
@@ -265,18 +215,22 @@ fun QuickColorWindow(
                         .size(46.dp)
                         .pointerInput(Unit) {
                             detectDragGestures(
+                                onDragStart = {
+                                    val curW = if (windowSize.width > 0) windowSize.width.toFloat() else defaultW
+                                    val curH = if (windowSize.height > 0) windowSize.height.toFloat() else defaultH
+                                    if (vm.quickColorWindowX < 0f) {
+                                        vm.quickColorWindowX = ((screenWidthPx - curW) / 2f).coerceAtLeast(0f)
+                                    }
+                                    if (vm.quickColorWindowY < 0f) {
+                                        vm.quickColorWindowY = ((screenHeightPx - curH) / 2f).coerceAtLeast(0f)
+                                    }
+                                },
                                 onDragEnd = { vm.persistQuickColorState() },
                                 onDragCancel = { vm.persistQuickColorState() },
                             ) { change, dragAmount ->
                                 change.consume()
-                                val curEffectiveW = if (windowSize.width > 0) windowSize.width.toFloat() else defaultW
-                                val curEffectiveH = if (windowSize.height > 0) windowSize.height.toFloat() else defaultH
-                                val curMinX = marginPx
-                                val curMaxX = (currentScreenWidthPx - curEffectiveW - marginPx).coerceAtLeast(curMinX)
-                                val curMinY = marginPx
-                                val curMaxY = (currentScreenHeightPx - curEffectiveH - marginPx).coerceAtLeast(curMinY)
-                                vm.quickColorWindowX = (vm.quickColorWindowX + dragAmount.x).coerceIn(curMinX, curMaxX)
-                                vm.quickColorWindowY = (vm.quickColorWindowY + dragAmount.y).coerceIn(curMinY, curMaxY)
+                                vm.quickColorWindowX += dragAmount.x
+                                vm.quickColorWindowY += dragAmount.y
                             }
                         }
                         .clickable {
@@ -309,14 +263,16 @@ fun QuickColorWindow(
                     ) {
                         DragPillHandle(
                             onDrag = { dragAmount ->
-                                val curEffectiveW = if (windowSize.width > 0) windowSize.width.toFloat() else defaultW
-                                val curEffectiveH = if (windowSize.height > 0) windowSize.height.toFloat() else defaultH
-                                val curMinX = marginPx
-                                val curMaxX = (currentScreenWidthPx - curEffectiveW - marginPx).coerceAtLeast(curMinX)
-                                val curMinY = marginPx
-                                val curMaxY = (currentScreenHeightPx - curEffectiveH - marginPx).coerceAtLeast(curMinY)
-                                vm.quickColorWindowX = (vm.quickColorWindowX + dragAmount.x).coerceIn(curMinX, curMaxX)
-                                vm.quickColorWindowY = (vm.quickColorWindowY + dragAmount.y).coerceIn(curMinY, curMaxY)
+                                val curW = if (windowSize.width > 0) windowSize.width.toFloat() else defaultW
+                                val curH = if (windowSize.height > 0) windowSize.height.toFloat() else defaultH
+                                if (vm.quickColorWindowX < 0f) {
+                                    vm.quickColorWindowX = ((screenWidthPx - curW) / 2f).coerceAtLeast(0f)
+                                }
+                                if (vm.quickColorWindowY < 0f) {
+                                    vm.quickColorWindowY = ((screenHeightPx - curH) / 2f).coerceAtLeast(0f)
+                                }
+                                vm.quickColorWindowX += dragAmount.x
+                                vm.quickColorWindowY += dragAmount.y
                                 vm.persistQuickColorState()
                             },
                             modifier = Modifier.align(Alignment.TopCenter),

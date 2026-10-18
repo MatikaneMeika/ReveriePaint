@@ -29,6 +29,7 @@ fun Tool.labelRes(): Int = when (this) {
     Tool.ERASER -> R.string.tool_eraser
     Tool.SMUDGE -> R.string.tool_smudge
     Tool.FILL -> R.string.tool_fill
+    Tool.ENCLOSE_FILL -> R.string.tool_enclose_fill
     Tool.GRADIENT -> R.string.tool_gradient
     Tool.SHAPES -> R.string.tool_shapes
     Tool.LINE -> R.string.tool_line
@@ -53,9 +54,11 @@ fun Tool.labelRes(): Int = when (this) {
     Tool.SHORTCUT -> R.string.tool_quick_action
     Tool.QUICK_BRUSH -> R.string.tool_quick_brush
     Tool.QUICK_COLOR -> R.string.tool_quick_color
+    Tool.QUICK_OKLCH -> R.string.tool_quick_oklch
     Tool.QUICK_LAYER -> R.string.tool_quick_layer
     Tool.SYMMETRY -> R.string.tool_symmetry
     Tool.PERSPECTIVE -> R.string.tool_perspective
+    Tool.SHADING_ASSIST -> R.string.shading_assist_title
 }
 
 @StringRes

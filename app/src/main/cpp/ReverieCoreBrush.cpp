@@ -14,6 +14,7 @@
 #include <QBuffer>
 #include <QUrl>
 #include <algorithm>
+#include <cmath>
 #include <QtEndian>
 #include <zlib.h>
 #include <QCryptographicHash>
@@ -24,6 +25,39 @@
 // calcAutoSpacing(): 自动间距 (useAutoSpacing="1") 的生效值计算, 与
 // KisPaintOpUtils::effectiveSpacing 内部用的是同一个公式。
 #include <kis_paintop_utils.h>
+
+// 把请求的间距 requested 写进笔刷型预设, 大直径湿笔 (colorsmudge) 加一道像素步长下限。
+//
+// 部分湿笔预设间距极小: Krita 自带湿笔多为 autoSpacing 且系数仅 0.05~0.08, 按
+// KisPaintOpUtils::effectiveSpacing 的 coeff * sqrt(D), 400px 时步长只有 ~1px, 一帧划过
+// 300px 就是 300 个 400x400 的 colorsmudge dab, paintLine 远超帧预算。
+// 下限按实际像素步长统一封堵线性间距与 autoSpacing 两条通道:
+//   Smearing (SmudgeRateMode 0): step >= max(4px, 0.055 * D)
+//   Dulling  (SmudgeRateMode 1): step >= max(4px, 0.080 * D)
+// 只抬不降, 且每次都从 requested 重新计算 (不回写 m_brushSpacing): 尺寸调回 100px 以下
+// 时恢复预设/用户原值, 不会把抬高的间距棘轮式留在小尺寸上。
+static bool isColorSmudgePreset(const KisPaintOpPresetSP &preset)
+{
+    return preset && preset->paintOp().id() == QLatin1String("colorsmudge");
+}
+
+static void writeBrushSpacing(KisBrushBasedPaintOpSettings *bs, const KisPaintOpPresetSP &preset,
+                              qreal brushSize, qreal requested)
+{
+    qreal minPxStep = 0.0;
+    if (isColorSmudgePreset(preset) && brushSize >= 100.0) {
+        const qreal minRatio = (preset->settings()->getInt("SmudgeRateMode", 0) == 1) ? 0.08 : 0.055;
+        minPxStep = qMax<qreal>(4.0, brushSize * minRatio);
+    }
+    if (bs->autoSpacingActive()) {
+        // 自动间距开启时间距参数控制 autoSpacingCoeff, 必须保持 autoSpacingActive(true),
+        // 否则大尺寸下间距不再按 sqrt(size) 自适应, 变成散点珠串 (与 Krita 一致)。
+        const qreal sqrtD = std::sqrt(qMax<qreal>(1.0, brushSize));
+        bs->setAutoSpacing(true, qMax(requested, minPxStep / sqrtD));
+    } else {
+        bs->setSpacing(minPxStep > 0.0 ? qMax(requested, minPxStep / brushSize) : requested);
+    }
+}
 
 float ReverieCore::brushPressureFraction(float pressure)
 {
@@ -894,6 +928,11 @@ bool ReverieCore::loadBrushPreset(int index)
                     m_brushSpacing = sp;
                 }
             }
+            // 只对湿笔重写 (其余预设原样保留解析出的间距)
+            const qreal parsed = bs->autoSpacingActive() ? bs->autoSpacingCoeff() : bs->spacing();
+            if (isColorSmudgePreset(m_brushPreset) && parsed > 0.0 && std::isfinite(parsed)) {
+                writeBrushSpacing(bs, m_brushPreset, m_brushSize, parsed);
+            }
         }
     }
     // Apply size / opacity / flow to the newly loaded preset.
@@ -1231,6 +1270,11 @@ void ReverieCore::setBrushSize(qreal v)
     m_brushSize = v;
     if (m_brushPreset && m_brushPreset->settings()) {
         m_brushPreset->settings()->setPaintOpSize(v);
+        // 尺寸变化会改变湿笔间距下限 (先选预设再把尺寸拉到 400px 的情况)
+        auto *bs = dynamic_cast<KisBrushBasedPaintOpSettings *>(m_brushPreset->settings().data());
+        if (bs && isColorSmudgePreset(m_brushPreset) && m_brushSpacing > 0.0) {
+            writeBrushSpacing(bs, m_brushPreset, m_brushSize, m_brushSpacing);
+        }
     }
 }
 
@@ -1317,14 +1361,7 @@ void ReverieCore::setBrushSpacing(qreal v)
         s->setProperty("spacing", v);
         return;
     }
-    if (bs->autoSpacingActive()) {
-        // 与 Krita 官方 KisBrushBasedPaintOpSettings 完全对齐:
-        // 自动间距开启时, 间距参数控制的是 autoSpacingCoeff, 保持 autoSpacingActive(true)!
-        // 严禁设为 false, 否则大尺寸下间距无法根据 sqrt(size) 自适应, 必然变成散点珠串!
-        bs->setAutoSpacing(true, v);
-    } else {
-        bs->setSpacing(v);
-    }
+    writeBrushSpacing(bs, m_brushPreset, m_brushSize, v);
     // 不再写 SpacingValue: 它是 KisSpacingOption 的 extraScale 乘数, 会与
     // brush spacing 相乘把间距再缩一次 (PressureSpacing=true 的预设尤其明显)。
 }
@@ -1567,7 +1604,12 @@ void ReverieCore::setBrushOptionDynamics(const QString &optionName, bool enabled
 
     s->setProperty(pressKey.toLatin1().constData(), true);
     s->setProperty(curveKey.toLatin1().constData(), true);
-    s->setProperty(valKey.toLatin1().constData(), strength);
+    const bool isMasterAttr = (opt.compare(QLatin1String("Opacity"), Qt::CaseInsensitive) == 0) ||
+                             (opt.compare(QLatin1String("Flow"), Qt::CaseInsensitive) == 0) ||
+                             (opt.compare(QLatin1String("Spacing"), Qt::CaseInsensitive) == 0);
+    if (!isMasterAttr) {
+        s->setProperty(valKey.toLatin1().constData(), strength);
+    }
 
     QString formattedCurve = curvePoints.trimmed();
     if (!formattedCurve.isEmpty() && !formattedCurve.endsWith(';')) {
@@ -1701,7 +1743,9 @@ bool ReverieCore::scratchpadStrokeStart(qreal x, qreal y, qreal pressure, qreal 
     }
 
     m_scratchpadPainter = new KisPainter(m_scratchpadDev);
-    KisNodeSP node = (!m_layers.isEmpty() && m_layers.first().node) ? KisNodeSP(m_layers.first().node) : KisNodeSP();
+    m_scratchpadPainter->setRunnableStrokeJobsInterface(&m_fakeExecutor);
+
+    KisNodeSP node = new KisPaintLayer(m_document, QStringLiteral("ScratchPad"), OPACITY_OPAQUE_U8, m_scratchpadDev);
     m_scratchpadPainter->setPaintOpPreset(m_brushPreset, node, m_document);
 
     const KoColorSpace *cs = m_scratchpadDev->colorSpace();
@@ -1715,7 +1759,7 @@ bool ReverieCore::scratchpadStrokeStart(qreal x, qreal y, qreal pressure, qreal 
 
     m_scratchpadPainter->setOpacityF(qBound<qreal>(0.0, m_brushOpacity, 1.0));
     QString compOp = m_brushPreset->settings() ? m_brushPreset->settings()->effectivePaintOpCompositeOp() : QStringLiteral("normal");
-    if (m_toolMode == ToolEraser || (m_presetIsEraserOverride == 1)) {
+    if (m_presetIsEraserOverride == 1) {
         compOp = QStringLiteral("erase");
     }
     m_scratchpadPainter->setCompositeOpId(compOp.isEmpty() ? QStringLiteral("normal") : compOp);
@@ -1724,6 +1768,20 @@ bool ReverieCore::scratchpadStrokeStart(qreal x, qreal y, qreal pressure, qreal 
     m_scratchpadDistInfo = new KisDistanceInformation(pt, 0.0);
     KisPaintInformation pi(pt, pressure, tiltX, tiltY, rotation);
     m_scratchpadPainter->paintAt(pi, m_scratchpadDistInfo);
+
+    if (KisPaintOp *op = m_scratchpadPainter->paintOp()) {
+        while (true) {
+            QVector<KisRunnableStrokeJobData *> jobs;
+            auto result = op->doAsynchronousUpdate(jobs);
+            for (auto *j : jobs) {
+                j->run();
+                delete j;
+            }
+            if (jobs.isEmpty() || !result.second) {
+                break;
+            }
+        }
+    }
 
     m_scratchpadLastSample = StrokeSample{pt, pressure, tiltX, tiltY, rotation, 0.0};
     m_scratchpadStrokeActive = true;
@@ -1737,6 +1795,21 @@ bool ReverieCore::scratchpadStrokeMove(qreal x, qreal y, qreal pressure, qreal t
     KisPaintInformation pi1(m_scratchpadLastSample.imgPos, m_scratchpadLastSample.pressure, m_scratchpadLastSample.tiltX, m_scratchpadLastSample.tiltY, m_scratchpadLastSample.rotation);
     KisPaintInformation pi2(pt, pressure, tiltX, tiltY, rotation);
     m_scratchpadPainter->paintLine(pi1, pi2, m_scratchpadDistInfo);
+
+    if (KisPaintOp *op = m_scratchpadPainter->paintOp()) {
+        while (true) {
+            QVector<KisRunnableStrokeJobData *> jobs;
+            auto result = op->doAsynchronousUpdate(jobs);
+            for (auto *j : jobs) {
+                j->run();
+                delete j;
+            }
+            if (jobs.isEmpty() || !result.second) {
+                break;
+            }
+        }
+    }
+
     m_scratchpadLastSample = StrokeSample{pt, pressure, tiltX, tiltY, rotation, 0.0};
     return true;
 }
@@ -1744,6 +1817,19 @@ bool ReverieCore::scratchpadStrokeMove(qreal x, qreal y, qreal pressure, qreal t
 void ReverieCore::scratchpadStrokeEnd()
 {
     if (m_scratchpadPainter) {
+        if (KisPaintOp *op = m_scratchpadPainter->paintOp()) {
+            while (true) {
+                QVector<KisRunnableStrokeJobData *> jobs;
+                auto result = op->doAsynchronousUpdate(jobs);
+                for (auto *j : jobs) {
+                    j->run();
+                    delete j;
+                }
+                if (jobs.isEmpty() || !result.second) {
+                    break;
+                }
+            }
+        }
         m_scratchpadPainter->end();
         delete m_scratchpadPainter;
         m_scratchpadPainter = nullptr;
@@ -1789,5 +1875,68 @@ void ReverieCore::scratchpadEnd()
     m_scratchpadHeight = 0;
     m_scratchpadStrokeActive = false;
 }
+
+QVector<float> ReverieCore::currentBrushOutline()
+{
+    if (!m_brushPreset || !m_brushPreset->settings()) {
+        return {};
+    }
+    KisBrushBasedPaintOpSettings *bs =
+        dynamic_cast<KisBrushBasedPaintOpSettings *>(m_brushPreset->settings().data());
+    if (!bs) {
+        return {};
+    }
+    KisBrushSP brush = bs->brush();
+    if (!brush) {
+        return {};
+    }
+
+    KisOptimizedBrushOutline outline = brush->outline();
+    if (outline.isEmpty()) {
+        return {};
+    }
+
+    const QRectF bounds = outline.boundingRect();
+    if (bounds.width() <= 0.0 || bounds.height() <= 0.0) {
+        return {};
+    }
+
+    const qreal cx = bounds.center().x();
+    const qreal cy = bounds.center().y();
+    // 归一化基准半径: 取半宽与半高的较大者，使多边形点落在 [-1.0, 1.0] 范围内
+    const qreal baseR = qMax(bounds.width(), bounds.height()) * 0.5;
+    if (baseR <= 0.0) {
+        return {};
+    }
+
+    QVector<QPolygonF> polys;
+    for (auto it = outline.begin(); it != outline.end(); ++it) {
+        const QPolygonF p = *it;
+        if (p.size() >= 3) {
+            polys.append(p);
+        }
+    }
+    if (polys.isEmpty()) {
+        return {};
+    }
+
+    int totalPts = 0;
+    for (const QPolygonF &p : polys) {
+        totalPts += p.size();
+    }
+
+    QVector<float> out;
+    out.reserve(1 + polys.size() + totalPts * 2);
+    out.append(static_cast<float>(polys.size()));
+    for (const QPolygonF &poly : polys) {
+        out.append(static_cast<float>(poly.size()));
+        for (const QPointF &pt : poly) {
+            out.append(static_cast<float>((pt.x() - cx) / baseR));
+            out.append(static_cast<float>((pt.y() - cy) / baseR));
+        }
+    }
+    return out;
+}
+
 
 

@@ -156,4 +156,80 @@ class BrushAndCurveLogicTest {
         val segFrac = lookup(avgP)
         assertTrue("Segment fraction between p0 and p1", segFrac in lookup(p0)..lookup(p1))
     }
+
+    @Test
+    fun `brush query matching correctly matches preset name, category, and display name`() {
+        val matches = com.reverie.paint.ui.painting.brush.matchesBrushQuery(
+            presetName = "b)_Basic-5_Size_Opacity",
+            presetGroup = "基础",
+            query = "basic"
+        )
+        assertTrue("Query 'basic' should match 'b)_Basic-5_Size_Opacity'", matches)
+
+        val matchesGroup = com.reverie.paint.ui.painting.brush.matchesBrushQuery(
+            presetName = "p)_Pencil-2_4B",
+            presetGroup = "铅笔",
+            query = "铅笔"
+        )
+        assertTrue("Query '铅笔' should match group '铅笔'", matchesGroup)
+
+        val matchesDisplayName = com.reverie.paint.ui.painting.brush.matchesBrushQuery(
+            presetName = "p)_Pencil-2_4B",
+            presetGroup = "铅笔",
+            query = "Pencil",
+            groupDisplayName = "Pencil"
+        )
+        assertTrue("Query 'Pencil' should match groupDisplayName 'Pencil'", matchesDisplayName)
+
+        val emptyQueryMatches = com.reverie.paint.ui.painting.brush.matchesBrushQuery(
+            presetName = "p)_Pencil-2_4B",
+            presetGroup = "铅笔",
+            query = "   "
+        )
+        assertTrue("Whitespace query should match all", emptyQueryMatches)
+
+        val mismatch = com.reverie.paint.ui.painting.brush.matchesBrushQuery(
+            presetName = "p)_Pencil-2_4B",
+            presetGroup = "铅笔",
+            query = "watercolor",
+            groupDisplayName = "Pencil"
+        )
+        assertTrue("Unrelated query should not match", !mismatch)
+
+        // Translation matching
+        val matchTranslation = com.reverie.paint.ui.painting.brush.matchesBrushQuery(
+            presetName = "b)_Basic-2_Opacity",
+            presetGroup = "基础",
+            query = "不透明度"
+        )
+        assertTrue("Query '不透明度' should match translation of 'b)_Basic-2_Opacity'", matchTranslation)
+
+        val matchAirbrush = com.reverie.paint.ui.painting.brush.matchesBrushQuery(
+            presetName = "Airbrush_linear",
+            presetGroup = "基础",
+            query = "线性"
+        )
+        assertTrue("Query '线性' should match translation of 'Airbrush_linear'", matchAirbrush)
+    }
+
+    @Test
+    fun `brush preset translations dictionary contains expected official Krita translations`() {
+        assertEquals(
+            "b) 基本-2 不透明度",
+            com.reverie.paint.ui.painting.brush.BrushPresetTranslations.getChineseTranslation("b)_Basic-2_Opacity")
+        )
+        assertEquals(
+            "喷枪 线性",
+            com.reverie.paint.ui.painting.brush.BrushPresetTranslations.getChineseTranslation("Airbrush_linear")
+        )
+        assertEquals(
+            "混合 模糊",
+            com.reverie.paint.ui.painting.brush.BrushPresetTranslations.getChineseTranslation("Blender_Blur")
+        )
+        assertEquals(
+            null,
+            com.reverie.paint.ui.painting.brush.BrushPresetTranslations.getChineseTranslation("Custom_Brush_NonExistent")
+        )
+    }
 }
+

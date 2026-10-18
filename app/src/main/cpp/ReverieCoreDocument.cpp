@@ -65,7 +65,8 @@ bool ReverieCore::newDocument(int width, int height, bool infiniteCanvas)
     // full bitmap copy.
     m_renderBufW = -1;
     m_renderBufH = -1;
-    m_dirtyRect = QRect();
+    clearDirtyRegions();
+    invalidateStaticUnderlay();
     m_bitmapInited = false;
     m_lastDirty = QRect();
     // Reset ALL per-document engine state. g_core is a process-lifetime
@@ -196,7 +197,8 @@ void ReverieCore::closeDocument()
     // Display pipeline: force full re-init on the next open (same as newDocument)
     m_renderBufW = -1;
     m_renderBufH = -1;
-    m_dirtyRect = QRect();
+    clearDirtyRegions();
+    invalidateStaticUnderlay();
     m_bitmapInited = false;
     m_lastDirty = QRect();
 
@@ -332,6 +334,8 @@ void ReverieCore::recompositeProjection()
     if (!image) {
         return;
     }
+    // 走到这里说明有图层改了像素或属性 (图层操作/撤销/滤镜), 底图不再可信
+    invalidateStaticUnderlay();
     image->refreshGraphAsync();
     image->waitForDone();
 }
@@ -353,6 +357,8 @@ void ReverieCore::waitForDocumentTasks()
 
 void ReverieCore::syncLayersFromImage()
 {
+    // 图层表重建 (结构/顺序/属性可能都变了): 静态底图的上界与像素都不再可信
+    invalidateStaticUnderlay();
     QHash<KisNode *, LayerEntry> oldEntries;
     for (const LayerEntry &e : m_layers) {
         if (e.node) oldEntries.insert(e.node, e);
@@ -413,6 +419,9 @@ void ReverieCore::syncLayersFromImage()
                     entry.nodeType = NodeTypeClone;
                 } else if (entry.isStrokeLayer) {
                     entry.nodeType = NodeTypeStroke;
+                } else if (node->property("reverie_is_transparency_mask").toBool()) {
+                    entry.nodeType = NodeTypeTransparencyMask;
+                    entry.depth = depth + 1;
                 } else {
                     KisPSDLayerStyleSP style = l->layerStyle();
                     if (style && style->stroke() && style->stroke()->effectEnabled()) {
@@ -442,7 +451,7 @@ void ReverieCore::syncLayersFromImage()
                 entry.node = node.data();
                 entry.visible = m->visible();
                 entry.name = m->name();
-                entry.depth = depth;
+                entry.depth = depth + 1;
                 entry.isGroup = false;
                 entry.locked = m->userLocked();
                 entry.alphaLocked = false;
@@ -544,6 +553,8 @@ void ReverieCore::markBlendChanged(int index)
     // Blend-mode change recomposites the whole canvas but only alters the
     // merged view: bump thumbs just for the node's ancestor groups (their
     // thumbs show composite) instead of stamping every cached thumb stale.
+    // 混合模式可能在运笔中途被改 (markRegionDirty 此时不作废底图), 这里显式整体作废。
+    invalidateStaticUnderlay();
     markRegionDirty(QRect(0, 0, m_docWidth, m_docHeight));
     if (index > 0 && index < m_layers.size() && m_layers[index].node) {
         KisNode *n = m_layers[index].node->parent().data();

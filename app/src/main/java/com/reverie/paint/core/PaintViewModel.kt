@@ -49,6 +49,12 @@ private const val STROKE_BATCH_CAPACITY = 256
 /** Delay before the stroke-start idle kick flushes a pen-down dot. */
 private const val STROKE_START_KICK_MS = 24L
 
+/** 批内合并: 上一批「引擎 flush + 瓦片渲染」超过这个耗时 (一整帧 60Hz 预算) 才把新样本并进同一批 (ms)。 */
+private const val STROKE_MERGE_TRIGGER_MS = 16L
+
+/** 批内合并: 合并后单批样本数上限 (与引擎 appendStrokeSample 的 32 样本分段对齐)。 */
+private const val STROKE_MERGE_MAX_SAMPLES = 32
+
 internal fun java.util.concurrent.atomic.AtomicInteger.decrementPositive() {
     while (true) {
         val cur = get()
@@ -290,6 +296,7 @@ class PaintViewModel : ViewModel() {
      */
     @Volatile
     internal var liquifyMaterializePending: Boolean = false
+    internal val liquifyMaterializeGate = com.reverie.paint.model.LiquifyMaterializeGate()
 
     fun updateLiquifyCoalesceSteps(steps: Int) {
         liquifyCoalesceSteps = steps
@@ -734,6 +741,18 @@ class PaintViewModel : ViewModel() {
     var targetExportAnimation by mutableStateOf(false)
     var layerRevision by mutableStateOf(0)
 
+    // 智能阴影辅助状态
+    var shadingAssistDialogOpen by mutableStateOf(false)
+    var shadingAssistConfig by mutableStateOf(com.reverie.paint.model.ShadingAssistConfig())
+    var shadingAssistPreviewBitmap by mutableStateOf<Bitmap?>(null)
+    var shadingAssistIsProcessing by mutableStateOf(false)
+    internal var shadingAssistNormalField: ShadingAssistEngine.NormalField? = null
+    internal var shadingAssistBaseBitmap: Bitmap? = null
+    internal var shadingAssistLineBitmap: Bitmap? = null
+    internal var shadingAssistRenderJob: kotlinx.coroutines.Job? = null
+    internal var shadingAssistComputeJob: kotlinx.coroutines.Job? = null
+    internal var shadingAssistRawDepth: ShadingAssistEngine.RawDepthData? = null
+
     fun toggleFavoriteBrush(name: String) {
         if (name.isBlank()) return
         favoriteBrushNames = if (favoriteBrushNames.contains(name)) {
@@ -832,6 +851,7 @@ class PaintViewModel : ViewModel() {
     internal var activeStrokeOriginalFlow: Double = 1.0
     internal var activeStrokeOriginalCompositeOp: String = "normal"
     internal var activeStrokeOriginalToolMode: Int = 0
+    internal var activeStrokePresetSwitched: Boolean = false
 
     /**
      * 获取指定工具 (如 "eraser") 的当前有效笔尖尺寸
@@ -854,6 +874,9 @@ class PaintViewModel : ViewModel() {
 
     // Reference Tool Window State (常态固定显示参考窗口)
     var referenceWindowOpen by mutableStateOf(false)
+    // 置中只发生在 referenceWindowOpen 的 false->true 边沿: 面板保持打开时
+    // 进入工程/重新组合不重置位置。VM 级字段跨工程保留。
+    var referenceWindowWasOpen = false
     var referenceImages by mutableStateOf<List<Bitmap>>(emptyList())
     var referenceAlbumSelectedUris by mutableStateOf<List<android.net.Uri>>(emptyList())
     var referenceIsGrayscale by mutableStateOf(false)
@@ -898,8 +921,46 @@ class PaintViewModel : ViewModel() {
 
     fun persistReferenceState() = persistProjectReferenceState()
 
+    // Current orientation tracked for quick windows layout
+    var isLandscapeMode by mutableStateOf(true)
+        internal set
+
+    // Per-orientation persistent positions for Quick Windows
+    internal var quickActionWindowX_land: Float = -1f
+    internal var quickActionWindowY_land: Float = -1f
+    internal var quickActionWindowX_port: Float = -1f
+    internal var quickActionWindowY_port: Float = -1f
+
+    internal var quickBrushWindowX_land: Float = -1f
+    internal var quickBrushWindowY_land: Float = -1f
+    internal var quickBrushOrientation_land: String = "horizontal"
+    internal var quickBrushWindowX_port: Float = -1f
+    internal var quickBrushWindowY_port: Float = -1f
+    internal var quickBrushOrientation_port: String = "horizontal"
+
+    internal var quickColorWindowX_land: Float = -1f
+    internal var quickColorWindowY_land: Float = -1f
+    internal var quickColorWindowX_port: Float = -1f
+    internal var quickColorWindowY_port: Float = -1f
+
+    internal var quickOklchWindowX_land: Float = -1f
+    internal var quickOklchWindowY_land: Float = -1f
+    internal var quickOklchWindowX_port: Float = -1f
+    internal var quickOklchWindowY_port: Float = -1f
+
+    internal var quickLayerWindowX_land: Float = -1f
+    internal var quickLayerWindowY_land: Float = -1f
+    internal var quickLayerWindowX_port: Float = -1f
+    internal var quickLayerWindowY_port: Float = -1f
+
+    internal var referenceWindowX_land: Float = -1f
+    internal var referenceWindowY_land: Float = -1f
+    internal var referenceWindowX_port: Float = -1f
+    internal var referenceWindowY_port: Float = -1f
+
     // Quick Actions Tool Window State (快捷操作浮窗)
     var quickActionWindowOpen by mutableStateOf(false)
+    var quickActionWindowWasOpen = false
     var quickActionsConfig by mutableStateOf(com.reverie.paint.model.QuickActionsConfig())
     var quickActionWindowX by mutableFloatStateOf(-1f)
     var quickActionWindowY by mutableFloatStateOf(-1f)
@@ -910,8 +971,19 @@ class PaintViewModel : ViewModel() {
     fun persistQuickActionsState() {
         if (!::appContext.isInitialized) return
         try {
+            if (isLandscapeMode) {
+                quickActionWindowX_land = quickActionWindowX
+                quickActionWindowY_land = quickActionWindowY
+            } else {
+                quickActionWindowX_port = quickActionWindowX
+                quickActionWindowY_port = quickActionWindowY
+            }
             val p = appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE).edit()
             p.putBoolean("quick_action_open", quickActionWindowOpen)
+            p.putFloat("quick_action_x_land", quickActionWindowX_land)
+            p.putFloat("quick_action_y_land", quickActionWindowY_land)
+            p.putFloat("quick_action_x_port", quickActionWindowX_port)
+            p.putFloat("quick_action_y_port", quickActionWindowY_port)
             p.putFloat("quick_action_x", quickActionWindowX)
             p.putFloat("quick_action_y", quickActionWindowY)
             p.putBoolean("quick_action_collapsed", quickActionCollapsed)
@@ -925,6 +997,7 @@ class PaintViewModel : ViewModel() {
 
     // Quick Brush Tool Window State (快捷笔刷浮窗)
     var quickBrushWindowOpen by mutableStateOf(false)
+    var quickBrushWindowWasOpen = false
     var quickBrushWindowX by mutableFloatStateOf(-1f)
     var quickBrushWindowY by mutableFloatStateOf(-1f)
     var quickBrushWindowWidth by mutableFloatStateOf(0f)
@@ -937,8 +1010,23 @@ class PaintViewModel : ViewModel() {
     fun persistQuickBrushState() {
         if (!::appContext.isInitialized) return
         try {
+            if (isLandscapeMode) {
+                quickBrushWindowX_land = quickBrushWindowX
+                quickBrushWindowY_land = quickBrushWindowY
+                quickBrushOrientation_land = quickBrushOrientation
+            } else {
+                quickBrushWindowX_port = quickBrushWindowX
+                quickBrushWindowY_port = quickBrushWindowY
+                quickBrushOrientation_port = quickBrushOrientation
+            }
             val p = appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE).edit()
             p.putBoolean("quick_brush_open", quickBrushWindowOpen)
+            p.putFloat("quick_brush_x_land", quickBrushWindowX_land)
+            p.putFloat("quick_brush_y_land", quickBrushWindowY_land)
+            p.putString("quick_brush_orientation_land", quickBrushOrientation_land)
+            p.putFloat("quick_brush_x_port", quickBrushWindowX_port)
+            p.putFloat("quick_brush_y_port", quickBrushWindowY_port)
+            p.putString("quick_brush_orientation_port", quickBrushOrientation_port)
             p.putFloat("quick_brush_x", quickBrushWindowX)
             p.putFloat("quick_brush_y", quickBrushWindowY)
             p.putBoolean("quick_brush_collapsed", quickBrushCollapsed)
@@ -954,6 +1042,7 @@ class PaintViewModel : ViewModel() {
 
     // Quick Color Tool Window State (快捷颜色浮窗)
     var quickColorWindowOpen by mutableStateOf(false)
+    var quickColorWindowWasOpen = false
     var quickColorWindowX by mutableFloatStateOf(-1f)
     var quickColorWindowY by mutableFloatStateOf(-1f)
     var quickColorWindowWidth by mutableFloatStateOf(0f)
@@ -964,8 +1053,19 @@ class PaintViewModel : ViewModel() {
     fun persistQuickColorState() {
         if (!::appContext.isInitialized) return
         try {
+            if (isLandscapeMode) {
+                quickColorWindowX_land = quickColorWindowX
+                quickColorWindowY_land = quickColorWindowY
+            } else {
+                quickColorWindowX_port = quickColorWindowX
+                quickColorWindowY_port = quickColorWindowY
+            }
             val p = appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE).edit()
             p.putBoolean("quick_color_open", quickColorWindowOpen)
+            p.putFloat("quick_color_x_land", quickColorWindowX_land)
+            p.putFloat("quick_color_y_land", quickColorWindowY_land)
+            p.putFloat("quick_color_x_port", quickColorWindowX_port)
+            p.putFloat("quick_color_y_port", quickColorWindowY_port)
             p.putFloat("quick_color_x", quickColorWindowX)
             p.putFloat("quick_color_y", quickColorWindowY)
             p.putBoolean("quick_color_collapsed", quickColorCollapsed)
@@ -996,8 +1096,56 @@ class PaintViewModel : ViewModel() {
         updateBrushSecondaryColor(c1)
     }
 
+    // Quick OKLCH Tool Window State (OKLCH 悬浮调色窗)
+    var quickOklchWindowOpen by mutableStateOf(false)
+    var quickOklchWindowWasOpen = false
+    var quickOklchWindowX by mutableFloatStateOf(-1f)
+    var quickOklchWindowY by mutableFloatStateOf(-1f)
+    var quickOklchWindowWidth by mutableFloatStateOf(0f)
+    var quickOklchWindowHeight by mutableFloatStateOf(0f)
+    var quickOklchCollapsed by mutableStateOf(false)
+
+    fun persistQuickOklchState() {
+        if (!::appContext.isInitialized) return
+        try {
+            if (isLandscapeMode) {
+                quickOklchWindowX_land = quickOklchWindowX
+                quickOklchWindowY_land = quickOklchWindowY
+            } else {
+                quickOklchWindowX_port = quickOklchWindowX
+                quickOklchWindowY_port = quickOklchWindowY
+            }
+            val p = appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE).edit()
+            p.putBoolean("quick_oklch_open", quickOklchWindowOpen)
+            p.putFloat("quick_oklch_x_land", quickOklchWindowX_land)
+            p.putFloat("quick_oklch_y_land", quickOklchWindowY_land)
+            p.putFloat("quick_oklch_x_port", quickOklchWindowX_port)
+            p.putFloat("quick_oklch_y_port", quickOklchWindowY_port)
+            p.putFloat("quick_oklch_x", quickOklchWindowX)
+            p.putFloat("quick_oklch_y", quickOklchWindowY)
+            p.putBoolean("quick_oklch_collapsed", quickOklchCollapsed)
+            p.apply()
+        } catch (_: Exception) {}
+    }
+
+    fun toggleQuickOklch(atPointer: Boolean = false) {
+        if (quickOklchWindowOpen) {
+            quickOklchWindowOpen = false
+        } else {
+            if (atPointer) {
+                lastPointerScreenPosition?.let { pos ->
+                    quickOklchWindowX = (pos.x - 110f).coerceAtLeast(0f)
+                    quickOklchWindowY = (pos.y - 120f).coerceAtLeast(0f)
+                }
+            }
+            quickOklchWindowOpen = true
+        }
+        persistQuickOklchState()
+    }
+
     // Quick Layer Tool Window State (快捷图层浮窗)
     var quickLayerWindowOpen by mutableStateOf(false)
+    var quickLayerWindowWasOpen = false
     var quickLayerWindowX by mutableFloatStateOf(-1f)
     var quickLayerWindowY by mutableFloatStateOf(-1f)
     var quickLayerWindowWidth by mutableFloatStateOf(0f)
@@ -1008,8 +1156,19 @@ class PaintViewModel : ViewModel() {
     fun persistQuickLayerState() {
         if (!::appContext.isInitialized) return
         try {
+            if (isLandscapeMode) {
+                quickLayerWindowX_land = quickLayerWindowX
+                quickLayerWindowY_land = quickLayerWindowY
+            } else {
+                quickLayerWindowX_port = quickLayerWindowX
+                quickLayerWindowY_port = quickLayerWindowY
+            }
             val p = appContext.getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE).edit()
             p.putBoolean("quick_layer_open", quickLayerWindowOpen)
+            p.putFloat("quick_layer_x_land", quickLayerWindowX_land)
+            p.putFloat("quick_layer_y_land", quickLayerWindowY_land)
+            p.putFloat("quick_layer_x_port", quickLayerWindowX_port)
+            p.putFloat("quick_layer_y_port", quickLayerWindowY_port)
             p.putFloat("quick_layer_x", quickLayerWindowX)
             p.putFloat("quick_layer_y", quickLayerWindowY)
             p.putBoolean("quick_layer_collapsed", quickLayerCollapsed)
@@ -1021,6 +1180,236 @@ class PaintViewModel : ViewModel() {
     fun toggleQuickLayer() {
         quickLayerWindowOpen = !quickLayerWindowOpen
         persistQuickLayerState()
+    }
+
+    /**
+     * 处理屏幕方向（横屏 / 竖屏）切换或屏幕尺寸变动。
+     * 为悬浮快捷小窗维护独立的横屏与竖屏排布记忆，杜绝旋转时将靠下/靠右的小窗单向挤压至正方形区域。
+     */
+    fun handleOrientationChange(
+        newIsLandscape: Boolean,
+        screenWidthPx: Float,
+        screenHeightPx: Float,
+        density: Float,
+    ) {
+        if (screenWidthPx <= 0f || screenHeightPx <= 0f) return
+
+        if (newIsLandscape == isLandscapeMode) {
+            clampQuickWindowsToSafeArea(screenWidthPx, screenHeightPx, density)
+            return
+        }
+
+        // 1. 保存当前活跃坐标到即将离去方向的独立槽位
+        if (isLandscapeMode) {
+            quickActionWindowX_land = quickActionWindowX
+            quickActionWindowY_land = quickActionWindowY
+            quickBrushWindowX_land = quickBrushWindowX
+            quickBrushWindowY_land = quickBrushWindowY
+            quickBrushOrientation_land = quickBrushOrientation
+            quickColorWindowX_land = quickColorWindowX
+            quickColorWindowY_land = quickColorWindowY
+            quickOklchWindowX_land = quickOklchWindowX
+            quickOklchWindowY_land = quickOklchWindowY
+            quickLayerWindowX_land = quickLayerWindowX
+            quickLayerWindowY_land = quickLayerWindowY
+            referenceWindowX_land = referenceWindowX
+            referenceWindowY_land = referenceWindowY
+        } else {
+            quickActionWindowX_port = quickActionWindowX
+            quickActionWindowY_port = quickActionWindowY
+            quickBrushWindowX_port = quickBrushWindowX
+            quickBrushWindowY_port = quickBrushWindowY
+            quickBrushOrientation_port = quickBrushOrientation
+            quickColorWindowX_port = quickColorWindowX
+            quickColorWindowY_port = quickColorWindowY
+            quickOklchWindowX_port = quickOklchWindowX
+            quickOklchWindowY_port = quickOklchWindowY
+            quickLayerWindowX_port = quickLayerWindowX
+            quickLayerWindowY_port = quickLayerWindowY
+            referenceWindowX_port = referenceWindowX
+            referenceWindowY_port = referenceWindowY
+        }
+
+        // 2. 切换方向标记
+        isLandscapeMode = newIsLandscape
+
+        // 3. 恢复进入新方向的独立记忆 (若新方向从未配置过，继承离去方向坐标作为初值)
+        if (newIsLandscape) {
+            quickActionWindowX = if (quickActionWindowX_land >= 0f) quickActionWindowX_land else quickActionWindowX
+            quickActionWindowY = if (quickActionWindowY_land >= 0f) quickActionWindowY_land else quickActionWindowY
+            quickBrushWindowX = if (quickBrushWindowX_land >= 0f) quickBrushWindowX_land else quickBrushWindowX
+            quickBrushWindowY = if (quickBrushWindowY_land >= 0f) quickBrushWindowY_land else quickBrushWindowY
+            quickBrushOrientation = quickBrushOrientation_land
+            quickColorWindowX = if (quickColorWindowX_land >= 0f) quickColorWindowX_land else quickColorWindowX
+            quickColorWindowY = if (quickColorWindowY_land >= 0f) quickColorWindowY_land else quickColorWindowY
+            quickOklchWindowX = if (quickOklchWindowX_land >= 0f) quickOklchWindowX_land else quickOklchWindowX
+            quickOklchWindowY = if (quickOklchWindowY_land >= 0f) quickOklchWindowY_land else quickOklchWindowY
+            quickLayerWindowX = if (quickLayerWindowX_land >= 0f) quickLayerWindowX_land else quickLayerWindowX
+            quickLayerWindowY = if (quickLayerWindowY_land >= 0f) quickLayerWindowY_land else quickLayerWindowY
+            if (referenceWindowX_land >= 0f) referenceWindowX = referenceWindowX_land
+            if (referenceWindowY_land >= 0f) referenceWindowY = referenceWindowY_land
+        } else {
+            quickActionWindowX = if (quickActionWindowX_port >= 0f) quickActionWindowX_port else quickActionWindowX
+            quickActionWindowY = if (quickActionWindowY_port >= 0f) quickActionWindowY_port else quickActionWindowY
+            quickBrushWindowX = if (quickBrushWindowX_port >= 0f) quickBrushWindowX_port else quickBrushWindowX
+            quickBrushWindowY = if (quickBrushWindowY_port >= 0f) quickBrushWindowY_port else quickBrushWindowY
+            quickBrushOrientation = quickBrushOrientation_port
+            quickColorWindowX = if (quickColorWindowX_port >= 0f) quickColorWindowX_port else quickColorWindowX
+            quickColorWindowY = if (quickColorWindowY_port >= 0f) quickColorWindowY_port else quickColorWindowY
+            quickOklchWindowX = if (quickOklchWindowX_port >= 0f) quickOklchWindowX_port else quickOklchWindowX
+            quickOklchWindowY = if (quickOklchWindowY_port >= 0f) quickOklchWindowY_port else quickOklchWindowY
+            quickLayerWindowX = if (quickLayerWindowX_port >= 0f) quickLayerWindowX_port else quickLayerWindowX
+            quickLayerWindowY = if (quickLayerWindowY_port >= 0f) quickLayerWindowY_port else quickLayerWindowY
+            if (referenceWindowX_port >= 0f) referenceWindowX = referenceWindowX_port
+            if (referenceWindowY_port >= 0f) referenceWindowY = referenceWindowY_port
+        }
+
+        // 4. 确保新视口中的各小窗处于当前屏幕安全区内
+        clampQuickWindowsToSafeArea(screenWidthPx, screenHeightPx, density)
+
+        // 5. 更新新方向槽位并持久化保存
+        if (newIsLandscape) {
+            quickActionWindowX_land = quickActionWindowX
+            quickActionWindowY_land = quickActionWindowY
+            quickBrushWindowX_land = quickBrushWindowX
+            quickBrushWindowY_land = quickBrushWindowY
+            quickColorWindowX_land = quickColorWindowX
+            quickColorWindowY_land = quickColorWindowY
+            quickOklchWindowX_land = quickOklchWindowX
+            quickOklchWindowY_land = quickOklchWindowY
+            quickLayerWindowX_land = quickLayerWindowX
+            quickLayerWindowY_land = quickLayerWindowY
+            referenceWindowX_land = referenceWindowX
+            referenceWindowY_land = referenceWindowY
+        } else {
+            quickActionWindowX_port = quickActionWindowX
+            quickActionWindowY_port = quickActionWindowY
+            quickBrushWindowX_port = quickBrushWindowX
+            quickBrushWindowY_port = quickBrushWindowY
+            quickColorWindowX_port = quickColorWindowX
+            quickColorWindowY_port = quickColorWindowY
+            quickOklchWindowX_port = quickOklchWindowX
+            quickOklchWindowY_port = quickOklchWindowY
+            quickLayerWindowX_port = quickLayerWindowX
+            quickLayerWindowY_port = quickLayerWindowY
+            referenceWindowX_port = referenceWindowX
+            referenceWindowY_port = referenceWindowY
+        }
+        persistQuickActionsState()
+        persistQuickBrushState()
+        persistQuickColorState()
+        persistQuickOklchState()
+        persistQuickLayerState()
+    }
+
+    fun clampQuickWindowsToSafeArea(
+        screenWidthPx: Float,
+        screenHeightPx: Float,
+        density: Float,
+    ) {
+        if (screenWidthPx <= 0f || screenHeightPx <= 0f) return
+        val margin = 16f * density
+
+        // 1. Reference Window
+        if (referenceWindowX >= 0f) {
+            val w = referenceWindowWidth * density
+            val h = referenceWindowHeight * density
+            val maxX = (screenWidthPx - w - margin).coerceAtLeast(0f)
+            val maxY = (screenHeightPx - h - margin).coerceAtLeast(0f)
+            var changed = false
+            if (referenceWindowX > maxX) { referenceWindowX = maxX; changed = true }
+            if (referenceWindowY > maxY) { referenceWindowY = maxY; changed = true }
+            if (changed) persistReferenceState()
+        }
+
+        // 2. Quick Action Window
+        if (quickActionWindowX >= 0f) {
+            val fallbackW = when {
+                quickActionCollapsed -> 64f * density
+                quickActionsConfig.layoutMode == com.reverie.paint.model.QuickActionLayoutMode.COLUMN -> 56f * density
+                quickActionsConfig.layoutMode == com.reverie.paint.model.QuickActionLayoutMode.ROW -> 240f * density
+                quickActionsConfig.layoutMode == com.reverie.paint.model.QuickActionLayoutMode.GRID_2 -> 110f * density
+                else -> 160f * density
+            }
+            val fallbackH = when {
+                quickActionCollapsed -> 44f * density
+                quickActionsConfig.layoutMode == com.reverie.paint.model.QuickActionLayoutMode.COLUMN -> 280f * density
+                quickActionsConfig.layoutMode == com.reverie.paint.model.QuickActionLayoutMode.ROW -> 76f * density
+                else -> 160f * density
+            }
+            val w = if (quickActionWindowWidth > 0f) quickActionWindowWidth else fallbackW
+            val h = if (quickActionWindowHeight > 0f) quickActionWindowHeight else fallbackH
+            val maxX = (screenWidthPx - w - margin).coerceAtLeast(0f)
+            val maxY = (screenHeightPx - h - margin).coerceAtLeast(0f)
+            var changed = false
+            if (quickActionWindowX > maxX) { quickActionWindowX = maxX; changed = true }
+            if (quickActionWindowY > maxY) { quickActionWindowY = maxY; changed = true }
+            if (changed) persistQuickActionsState()
+        }
+
+        // 3. Quick Brush Window
+        if (quickBrushWindowX >= 0f) {
+            val fallbackW = when {
+                quickBrushCollapsed -> 64f * density
+                quickBrushOrientation == "vertical" -> 54f * density
+                else -> (quickBrushMaxLength * 43f - 1f).coerceAtLeast(42f) * density
+            }
+            val fallbackH = when {
+                quickBrushCollapsed -> 44f * density
+                quickBrushOrientation == "vertical" -> 260f * density
+                else -> 54f * density
+            }
+            val w = if (quickBrushWindowWidth > 0f) quickBrushWindowWidth else fallbackW
+            val h = if (quickBrushWindowHeight > 0f) quickBrushWindowHeight else fallbackH
+            val maxX = (screenWidthPx - w - margin).coerceAtLeast(0f)
+            val maxY = (screenHeightPx - h - margin).coerceAtLeast(0f)
+            var changed = false
+            if (quickBrushWindowX > maxX) { quickBrushWindowX = maxX; changed = true }
+            if (quickBrushWindowY > maxY) { quickBrushWindowY = maxY; changed = true }
+            if (changed) persistQuickBrushState()
+        }
+
+        // 4. Quick Color Window
+        if (quickColorWindowX >= 0f) {
+            val fallbackW = if (quickColorCollapsed) 48f * density else 212f * density
+            val fallbackH = if (quickColorCollapsed) 48f * density else 272f * density
+            val w = if (quickColorWindowWidth > 0f) quickColorWindowWidth else fallbackW
+            val h = if (quickColorWindowHeight > 0f) quickColorWindowHeight else fallbackH
+            val maxX = (screenWidthPx - w - margin).coerceAtLeast(0f)
+            val maxY = (screenHeightPx - h - margin).coerceAtLeast(0f)
+            var changed = false
+            if (quickColorWindowX > maxX) { quickColorWindowX = maxX; changed = true }
+            if (quickColorWindowY > maxY) { quickColorWindowY = maxY; changed = true }
+            if (changed) persistQuickColorState()
+        }
+
+        // 5. Quick OKLCH Window
+        if (quickOklchWindowX >= 0f) {
+            val fallbackW = if (quickOklchCollapsed) 48f * density else 244f * density
+            val fallbackH = if (quickOklchCollapsed) 48f * density else 320f * density
+            val w = if (quickOklchWindowWidth > 0f) quickOklchWindowWidth else fallbackW
+            val h = if (quickOklchWindowHeight > 0f) quickOklchWindowHeight else fallbackH
+            val maxX = (screenWidthPx - w - margin).coerceAtLeast(0f)
+            val maxY = (screenHeightPx - h - margin).coerceAtLeast(0f)
+            var changed = false
+            if (quickOklchWindowX > maxX) { quickOklchWindowX = maxX; changed = true }
+            if (quickOklchWindowY > maxY) { quickOklchWindowY = maxY; changed = true }
+            if (changed) persistQuickOklchState()
+        }
+
+        // 6. Quick Layer Window
+        if (quickLayerWindowX >= 0f) {
+            val fallbackW = if (quickLayerCollapsed) 48f * density else 156f * density
+            val fallbackH = if (quickLayerCollapsed) 48f * density else 290f * density
+            val w = if (quickLayerWindowWidth > 0f) quickLayerWindowWidth else fallbackW
+            val h = if (quickLayerWindowHeight > 0f) quickLayerWindowHeight else fallbackH
+            val maxX = (screenWidthPx - w - margin).coerceAtLeast(0f)
+            val maxY = (screenHeightPx - h - margin).coerceAtLeast(0f)
+            var changed = false
+            if (quickLayerWindowX > maxX) { quickLayerWindowX = maxX; changed = true }
+            if (quickLayerWindowY > maxY) { quickLayerWindowY = maxY; changed = true }
+            if (changed) persistQuickLayerState()
+        }
     }
 
     fun getOrderedFavoriteBrushes(): List<BrushPresetInfo> {
@@ -1106,8 +1495,14 @@ class PaintViewModel : ViewModel() {
             com.reverie.paint.model.QuickAction.TOGGLE_QUICK_COLOR -> {
                 toggleQuickColor(atPointer = true)
             }
+            com.reverie.paint.model.QuickAction.TOGGLE_QUICK_OKLCH -> {
+                toggleQuickOklch(atPointer = true)
+            }
             com.reverie.paint.model.QuickAction.TOGGLE_QUICK_LAYER -> {
                 toggleQuickLayer()
+            }
+            com.reverie.paint.model.QuickAction.SHADING_ASSIST -> {
+                openShadingAssist()
             }
         }
     }
@@ -1131,6 +1526,18 @@ class PaintViewModel : ViewModel() {
         }
         syncAuthorProfileToCore()
     }
+
+    fun isQuickActionActivated(action: com.reverie.paint.model.QuickAction): Boolean =
+        when (action) {
+            com.reverie.paint.model.QuickAction.LOCK_VIEW -> isViewTransformLocked
+            com.reverie.paint.model.QuickAction.FLIP_H -> viewFlipX
+            com.reverie.paint.model.QuickAction.FLIP_V -> viewFlipY
+            com.reverie.paint.model.QuickAction.TOGGLE_ERASER -> currentToolId == "eraser"
+            com.reverie.paint.model.QuickAction.ALPHA_LOCK -> isCurrentLayerAlphaLocked()
+            com.reverie.paint.model.QuickAction.DISABLE_TOUCH -> isCanvasTouchDisabled
+            com.reverie.paint.model.QuickAction.SHADING_ASSIST -> shadingAssistDialogOpen
+            else -> false
+        }
 
     fun syncAuthorProfileToCore() {
         runCore(render = false) {
@@ -1243,16 +1650,31 @@ class PaintViewModel : ViewModel() {
     var accentColorHex by mutableStateOf("#5A6E8A")
     var monetEnabled by mutableStateOf(false) // 莫奈动态取色
     var themeMode by mutableStateOf("DARK") // "DARK", "LIGHT", "SYSTEM"
+    var themeContrast by mutableStateOf("STANDARD") // "SOFT", "STANDARD", "HIGH"
     var paintingUiScale by mutableFloatStateOf(1.0f) // 绘画页面整体 UI 大小缩放 (0.75 - 1.35)
     var layerRowHeightDp by mutableIntStateOf(52) // 44: 紧凑, 52: 标准, 64: 舒适
     var layerHeaderInheritAlpha by mutableStateOf(false) // 图层面板顶部按钮行为: false 为剪切蒙版, true 为继承透明度
     var quickSliderHeightDp by mutableIntStateOf(175) // 绘画界面快捷滑块长度 (100 - 260 dp, 默认 175)
     var leftHandMode by mutableStateOf(false) // 左手模式: 快捷工具栏与滑块镜像停靠在右侧
+    /** 自由悬浮布局配置 (平板专属) */
+    var floatingUiConfig by mutableStateOf(com.reverie.paint.model.FloatingUiConfig())
+
+    /**
+     * 顶栏 / 工具栏按钮 / 滑块栏的实测屏幕边界 (root 坐标, px), 由 Compose 侧用
+     * onGloballyPositioned 写入。画布视图的前缓冲 UI 避让区用它取代硬编码的 dp 矩形
+     * (悬浮/贴边/左手/横竖屏下真实几何差异很大)。UI 线程写、触控/渲染线程读; null = 尚未测量。
+     */
+    @Volatile var measuredTopBarRect: android.graphics.RectF? = null
+
+    @Volatile var measuredToolRailRect: android.graphics.RectF? = null
+
+    @Volatile var measuredSliderRailRect: android.graphics.RectF? = null
     var selectionMaskColorHex by mutableStateOf("#141416") // 选区蒙版遮罩颜色 (默认深空灰黑)
     var selectionMaskOpacity by mutableFloatStateOf(0.47f) // 选区蒙版遮罩不透明度 (0.10 - 0.90, 默认 0.47)
 
-    /** 左侧工具条滑块面板的实时高度 (px), 由 ToolRail 测量写入; 时间轴"展开至同高"对齐用 */
+    /** 左侧工具条滑块面板的实时高度与宽度 (px), 由 ToolRail 测量写入; 时间轴对齐与悬浮自适应避让用 */
     var railSliderPanelHeightPx by mutableFloatStateOf(0f)
+    var railSliderPanelWidthPx by mutableFloatStateOf(0f)
     var showToolbarSqueezedDialog by mutableStateOf(false)
     var toolbarSqueezedWarningDismissed by mutableStateOf(false)
     var showLowStorageDialog by mutableStateOf(false)
@@ -1373,7 +1795,7 @@ class PaintViewModel : ViewModel() {
     var penModeSingleFingerPanEnabled by mutableStateOf(true) // 笔模式下单指平移画布 (可配置开关)
     var brushCursorMode by mutableIntStateOf(3) // 0: 不显示, 1: 绘画时显示, 2: 悬空显示, 3: 绘画和悬空显示
     var eraserCursorMode by mutableIntStateOf(3)
-    var cursorStyleMode by mutableIntStateOf(5) // 0: 圆形, 1: 十字准星, 2: 点, 3: 无, 4: 系统指针, 5: 圆+十字准星
+    var cursorStyleMode by mutableIntStateOf(5) // 0: 圆形, 1: 十字准星, 2: 点, 3: 无, 4: 系统指针, 5: 圆+十字准星, 6: 笔刷轮廓
     var quickShapeEnabled by mutableStateOf(false) // 驻停线条成形，默认关闭
     var quickShapeQuadrilateralEnabled by mutableStateOf(false)
     var quickShapeConversionsEnabled by mutableStateOf(false)
@@ -1711,10 +2133,26 @@ class PaintViewModel : ViewModel() {
     var fillSampleLayers by mutableIntStateOf(1) // 0: 当前图层, 1: 全部图层
     var fillExpand by mutableIntStateOf(0) // 拓展 (-16..32 px)
     var fillFeather by mutableIntStateOf(0) // 羽化 (0..32 px)
-    var fillCloseGap by mutableIntStateOf(4) // 闭合空隙 (0..16 px)
+    var fillCloseGap by mutableIntStateOf(0) // 闭合空隙 (0..16 px, 默认为 0 保证秒级瞬时填充)
     var fillOpacity by mutableDoubleStateOf(1.0)
     var fillCompositeOp by mutableStateOf("normal")
     internal var fillPattern by mutableStateOf<FillPattern?>(null)
+
+    // 圈涂 (Enclose and Fill) 属性状态 (持久化)
+    var encloseFillCloseGap by mutableIntStateOf(4) // 闭合空隙 (0..32 px)
+    var encloseFillTolerance by mutableIntStateOf(16) // 容差 (1..100)
+    var encloseFillSampleLayers by mutableIntStateOf(1) // 0: 当前图层, 1: 全部图层
+    var encloseFillExpand by mutableIntStateOf(0) // 拓展 (-16..32 px)
+    var encloseFillFeather by mutableIntStateOf(0) // 羽化 (0..32 px)
+    var encloseFillRegionMode by mutableStateOf(com.reverie.paint.model.EncloseFillRegionMode.ALL) // 过滤模式 (默认全部区域: 仅参考外层轮廓)
+    var encloseFillSpecificColor by mutableIntStateOf(0xFF000000.toInt()) // 特定目标颜色
+    var encloseFillIncludeContour by mutableStateOf(false) // 是否包含边缘连通区 (默认排除外部背景)
+    var encloseFillSettingsOpen by mutableStateOf(false) // 圈涂高级设置弹窗开关
+
+    // 填充连击防抖追踪，防止卡顿时连点向撤销栈压入重复事务
+    internal var lastFillSubmitTime = 0L
+    internal var lastFillDocX = -9999f
+    internal var lastFillDocY = -9999f
 
     var gradientType by mutableIntStateOf(0) // 0: 线性, 1: 径向, 2: 角度
     var gradientRepeat by mutableIntStateOf(0) // 0: 无, 1: 重复, 2: 往返
@@ -2084,6 +2522,19 @@ class PaintViewModel : ViewModel() {
                 .getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
                 .edit()
                 .putBoolean("eyedropperOffsetEnabled", enable)
+                .apply()
+        }
+    }
+
+    var penModeStylusEyedropperEnabled by mutableStateOf(true)
+
+    fun updatePenModeStylusEyedropperEnabled(enable: Boolean) {
+        penModeStylusEyedropperEnabled = enable
+        if (::appContext.isInitialized) {
+            appContext
+                .getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
+                .edit()
+                .putBoolean("penModeStylusEyedropperEnabled", enable)
                 .apply()
         }
     }
@@ -2897,6 +3348,79 @@ class PaintViewModel : ViewModel() {
         }
     }
 
+    fun updateFloatingUiEnabled(enabled: Boolean) {
+        floatingUiConfig = floatingUiConfig.copy(enabled = enabled)
+        persistFloatingUiConfig()
+    }
+
+    fun updateFloatingUiPositions(
+        topBarPosition: com.reverie.paint.model.PanelPosition = floatingUiConfig.topBarPosition,
+        toolRailPosition: com.reverie.paint.model.PanelPosition = floatingUiConfig.toolRailPosition,
+        sliderRailPosition: com.reverie.paint.model.PanelPosition = floatingUiConfig.sliderRailPosition,
+        panelOrder: List<String> = floatingUiConfig.panelOrder,
+    ) {
+        floatingUiConfig = floatingUiConfig.copy(
+            topBarPosition = topBarPosition,
+            toolRailPosition = toolRailPosition,
+            sliderRailPosition = sliderRailPosition,
+            panelOrder = panelOrder,
+        )
+        persistFloatingUiConfig()
+    }
+
+    fun updateFloatingUiMargin(marginDp: Int) {
+        floatingUiConfig = floatingUiConfig.copy(marginDp = marginDp.coerceIn(8, 48))
+        persistFloatingUiConfig()
+    }
+
+    fun updateFloatingUiScale(scale: Float) {
+        floatingUiConfig = floatingUiConfig.copy(scale = scale.coerceIn(0.70f, 1.40f))
+        persistFloatingUiConfig()
+    }
+
+    fun updateFloatingUiTopBarActions(actions: List<com.reverie.paint.model.QuickAction>) {
+        floatingUiConfig = floatingUiConfig.copy(topBarActions = actions)
+        persistFloatingUiConfig()
+    }
+
+    fun updateFloatingUiPanelOrder(order: List<String>) {
+        floatingUiConfig = floatingUiConfig.copy(panelOrder = order)
+        persistFloatingUiConfig()
+    }
+
+    fun resetFloatingUiEdges() {
+        floatingUiConfig = floatingUiConfig.copy(
+            topBarPosition = com.reverie.paint.model.PanelPosition(com.reverie.paint.model.PanelEdge.TOP, com.reverie.paint.model.PanelAlignment.END),
+            toolRailPosition = com.reverie.paint.model.PanelPosition(com.reverie.paint.model.PanelEdge.LEFT, com.reverie.paint.model.PanelAlignment.START),
+            sliderRailPosition = com.reverie.paint.model.PanelPosition(com.reverie.paint.model.PanelEdge.LEFT, com.reverie.paint.model.PanelAlignment.END),
+            marginDp = 12,
+            scale = 1.0f,
+            topBarActions = emptyList(),
+            panelOrder = com.reverie.paint.model.FloatingUiConfig.DEFAULT_PANEL_ORDER,
+        )
+        persistFloatingUiConfig()
+    }
+
+    private fun persistFloatingUiConfig() {
+        if (::appContext.isInitialized) {
+            appContext
+                .getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
+                .edit()
+                .putBoolean("floatingUi_enabled", floatingUiConfig.enabled)
+                .putString("floatingUi_topBarEdge", floatingUiConfig.topBarPosition.edge.name)
+                .putString("floatingUi_topBarAlign", floatingUiConfig.topBarPosition.alignment.name)
+                .putString("floatingUi_toolRailEdge", floatingUiConfig.toolRailPosition.edge.name)
+                .putString("floatingUi_toolRailAlign", floatingUiConfig.toolRailPosition.alignment.name)
+                .putString("floatingUi_sliderRailEdge", floatingUiConfig.sliderRailPosition.edge.name)
+                .putString("floatingUi_sliderRailAlign", floatingUiConfig.sliderRailPosition.alignment.name)
+                .putInt("floatingUi_marginDp", floatingUiConfig.marginDp)
+                .putFloat("floatingUi_scale", floatingUiConfig.scale)
+                .putString("floatingUi_topBarActions", floatingUiConfig.topBarActions.joinToString(",") { it.id })
+                .putString("floatingUi_panelOrder", floatingUiConfig.panelOrder.joinToString(","))
+                .apply()
+        }
+    }
+
     fun updateLayerHeaderInheritAlpha(enabled: Boolean) {
         layerHeaderInheritAlpha = enabled
         if (::appContext.isInitialized) {
@@ -2981,6 +3505,18 @@ class PaintViewModel : ViewModel() {
         applyCurrentTheme()
     }
 
+    fun updateThemeContrast(contrast: String) {
+        themeContrast = contrast
+        if (::appContext.isInitialized) {
+            appContext
+                .getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
+                .edit()
+                .putString("themeContrast", contrast)
+                .apply()
+        }
+        applyCurrentTheme()
+    }
+
     fun isCurrentlyDark(): Boolean {
         return when (themeMode) {
             "LIGHT" -> false
@@ -3002,9 +3538,9 @@ class PaintViewModel : ViewModel() {
         val dark = isCurrentlyDark()
         val parsedAccent = com.reverie.paint.ui.theme.parseColor(accentColorHex)
         val baseTheme = if (monetEnabled && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
-            com.reverie.paint.ui.theme.getMonetColors(appContext, isDark = dark, fallbackAccent = parsedAccent)
+            com.reverie.paint.ui.theme.getMonetColors(appContext, isDark = dark, fallbackAccent = parsedAccent, contrast = themeContrast)
         } else {
-            com.reverie.paint.ui.theme.buildThemeColors(isDark = dark, accent = parsedAccent)
+            com.reverie.paint.ui.theme.buildThemeColors(isDark = dark, accent = parsedAccent, contrast = themeContrast)
         }
 
         com.reverie.paint.ui.theme.Theme.current = if (canvasBgColorHex.isNotBlank() && canvasBgColorHex != "DEFAULT") {
@@ -3171,6 +3707,48 @@ class PaintViewModel : ViewModel() {
             panelPinningEnabled = prefs.getBoolean("panelPinningEnabled", false)
             layerHeaderInheritAlpha = prefs.getBoolean("layerHeaderInheritAlpha", false)
             leftHandMode = prefs.getBoolean("leftHandMode", false)
+            val isTabletDevice = DeviceUtils.isTablet(appContext)
+            val floatingSavedEnabled = prefs.getBoolean("floatingUi_enabled", isTabletDevice)
+            val topBarEdgeName = prefs.getString("floatingUi_topBarEdge", "TOP") ?: "TOP"
+            val topBarAlignName = prefs.getString("floatingUi_topBarAlign", "END") ?: "END"
+            val toolRailEdgeName = prefs.getString("floatingUi_toolRailEdge", "LEFT") ?: "LEFT"
+            val toolRailAlignName = prefs.getString("floatingUi_toolRailAlign", "START") ?: "START"
+            val sliderRailEdgeName = prefs.getString("floatingUi_sliderRailEdge", "LEFT") ?: "LEFT"
+            val sliderRailAlignName = prefs.getString("floatingUi_sliderRailAlign", "END") ?: "END"
+            val marginDp = prefs.getInt("floatingUi_marginDp", 12).coerceIn(8, 48)
+            val floatingScale = prefs.getFloat("floatingUi_scale", 1.0f).coerceIn(0.70f, 1.40f)
+            val topBarActionsStr = prefs.getString("floatingUi_topBarActions", null)
+            val topBarActions = if (!topBarActionsStr.isNullOrEmpty()) {
+                topBarActionsStr.split(",").mapNotNull { com.reverie.paint.model.QuickAction.fromId(it) }
+            } else {
+                emptyList()
+            }
+            val panelOrderStr = prefs.getString("floatingUi_panelOrder", null)
+            val panelOrder = if (!panelOrderStr.isNullOrEmpty()) {
+                val list = panelOrderStr.split(",").filter { it.isNotBlank() }
+                if (list.isNotEmpty()) list else com.reverie.paint.model.FloatingUiConfig.DEFAULT_PANEL_ORDER
+            } else {
+                com.reverie.paint.model.FloatingUiConfig.DEFAULT_PANEL_ORDER
+            }
+            floatingUiConfig = com.reverie.paint.model.FloatingUiConfig(
+                enabled = isTabletDevice && floatingSavedEnabled,
+                topBarPosition = com.reverie.paint.model.PanelPosition(
+                    edge = runCatching { com.reverie.paint.model.PanelEdge.valueOf(topBarEdgeName) }.getOrDefault(com.reverie.paint.model.PanelEdge.TOP),
+                    alignment = runCatching { com.reverie.paint.model.PanelAlignment.valueOf(topBarAlignName) }.getOrDefault(com.reverie.paint.model.PanelAlignment.END),
+                ),
+                toolRailPosition = com.reverie.paint.model.PanelPosition(
+                    edge = runCatching { com.reverie.paint.model.PanelEdge.valueOf(toolRailEdgeName) }.getOrDefault(com.reverie.paint.model.PanelEdge.LEFT),
+                    alignment = runCatching { com.reverie.paint.model.PanelAlignment.valueOf(toolRailAlignName) }.getOrDefault(com.reverie.paint.model.PanelAlignment.START),
+                ),
+                sliderRailPosition = com.reverie.paint.model.PanelPosition(
+                    edge = runCatching { com.reverie.paint.model.PanelEdge.valueOf(sliderRailEdgeName) }.getOrDefault(com.reverie.paint.model.PanelEdge.LEFT),
+                    alignment = runCatching { com.reverie.paint.model.PanelAlignment.valueOf(sliderRailAlignName) }.getOrDefault(com.reverie.paint.model.PanelAlignment.END),
+                ),
+                marginDp = marginDp,
+                scale = floatingScale,
+                topBarActions = topBarActions,
+                panelOrder = panelOrder,
+            )
             selectionMaskColorHex = prefs.getString("selection_mask_color", "#141416") ?: "#141416"
             selectionMaskOpacity = prefs.getFloat("selection_mask_opacity", 0.47f).coerceIn(0.10f, 0.90f)
             blurBackground = prefs.getBoolean("blurBackground", true) &&
@@ -3180,6 +3758,7 @@ class PaintViewModel : ViewModel() {
             canvasBgColorHex = prefs.getString("canvasBgColor", "DEFAULT") ?: "DEFAULT"
             monetEnabled = prefs.getBoolean("monetEnabled", false)
             themeMode = prefs.getString("themeMode", "DARK") ?: "DARK"
+            themeContrast = prefs.getString("themeContrast", "STANDARD") ?: "STANDARD"
             val defaultImmersive = DeviceUtils.isTablet(appContext)
             immersiveMode = if (prefs.contains("immersiveMode")) {
                 prefs.getBoolean("immersiveMode", false)
@@ -3258,6 +3837,7 @@ class PaintViewModel : ViewModel() {
             longPressEyedropperEnabled = prefs.getBoolean("longPressEyedropperEnabled", true)
             eyedropperSensitivity = prefs.getInt("eyedropperSensitivity", 3).coerceIn(1, 5)
             eyedropperOffsetEnabled = prefs.getBoolean("eyedropperOffsetEnabled", true)
+            penModeStylusEyedropperEnabled = prefs.getBoolean("penModeStylusEyedropperEnabled", true)
             brushCursorMode = prefs.getInt("brushCursorMode", 3)
             eraserCursorMode = prefs.getInt("eraserCursorMode", 3)
             cursorStyleMode = prefs.getInt("cursorStyleMode", 5)
@@ -3386,21 +3966,43 @@ class PaintViewModel : ViewModel() {
             }
 
             // Window placement remains a device preference; images and view state belong to the document.
-            referenceWindowX = prefs.getFloat("ref_window_x", 80f)
-            referenceWindowY = prefs.getFloat("ref_window_y", 140f)
+            // 面板 x/y 不再读取: 打开时由 PaintingQuickWindows 按屏幕居中 (防止旧位置在屏外)
             referenceWindowWidth = prefs.getFloat("ref_window_w", 260f)
             referenceWindowHeight = prefs.getFloat("ref_window_h", 300f)
             referenceAllowRotation = prefs.getBoolean("ref_allow_rotation", true)
             hasLegacyReferenceImages = prefs.getInt("ref_images_count", 0) > 0 &&
                 File(appContext.filesDir, "ref_images").isDirectory
 
+            val isLand = if (::appContext.isInitialized) {
+                val conf = appContext.resources.configuration
+                conf.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE ||
+                        (conf.orientation != android.content.res.Configuration.ORIENTATION_PORTRAIT &&
+                                appContext.resources.displayMetrics.widthPixels >= appContext.resources.displayMetrics.heightPixels)
+            } else true
+            isLandscapeMode = isLand
+
             // 快捷操作浮窗持久化恢复
             quickActionWindowOpen = prefs.getBoolean("quick_action_open", false)
-            quickActionWindowX = prefs.getFloat("quick_action_x", -1f)
-            quickActionWindowY = prefs.getFloat("quick_action_y", -1f)
-            if (quickActionWindowX == 60f && quickActionWindowY == 200f) {
-                quickActionWindowX = -1f
-                quickActionWindowY = -1f
+            quickActionWindowWasOpen = quickActionWindowOpen
+            var qaLegacyX = prefs.getFloat("quick_action_x", -1f)
+            var qaLegacyY = prefs.getFloat("quick_action_y", -1f)
+            if (qaLegacyX == 60f && qaLegacyY == 200f) {
+                qaLegacyX = -1f
+                qaLegacyY = -1f
+            }
+            quickActionWindowX_land = prefs.getFloat("quick_action_x_land", qaLegacyX)
+            quickActionWindowY_land = prefs.getFloat("quick_action_y_land", qaLegacyY)
+            quickActionWindowX_port = prefs.getFloat("quick_action_x_port", -1f)
+            quickActionWindowY_port = prefs.getFloat("quick_action_y_port", -1f)
+            quickActionWindowX = if (isLand) {
+                if (quickActionWindowX_land >= 0f) quickActionWindowX_land else qaLegacyX
+            } else {
+                if (quickActionWindowX_port >= 0f) quickActionWindowX_port else qaLegacyX
+            }
+            quickActionWindowY = if (isLand) {
+                if (quickActionWindowY_land >= 0f) quickActionWindowY_land else qaLegacyY
+            } else {
+                if (quickActionWindowY_port >= 0f) quickActionWindowY_port else qaLegacyY
             }
             quickActionCollapsed = prefs.getBoolean("quick_action_collapsed", false)
             val layoutMode = com.reverie.paint.model.QuickActionLayoutMode.fromId(prefs.getString("quick_action_layout", "column") ?: "column")
@@ -3419,14 +4021,32 @@ class PaintViewModel : ViewModel() {
 
             // 快捷笔刷浮窗持久化恢复
             quickBrushWindowOpen = prefs.getBoolean("quick_brush_open", false)
-            quickBrushWindowX = prefs.getFloat("quick_brush_x", -1f)
-            quickBrushWindowY = prefs.getFloat("quick_brush_y", -1f)
-            if (quickBrushWindowX == 60f && quickBrushWindowY == 280f) {
-                quickBrushWindowX = -1f
-                quickBrushWindowY = -1f
+            quickBrushWindowWasOpen = quickBrushWindowOpen
+            var qbLegacyX = prefs.getFloat("quick_brush_x", -1f)
+            var qbLegacyY = prefs.getFloat("quick_brush_y", -1f)
+            if (qbLegacyX == 60f && qbLegacyY == 280f) {
+                qbLegacyX = -1f
+                qbLegacyY = -1f
             }
+            val qbLegacyOrient = prefs.getString("quick_brush_orientation", "horizontal") ?: "horizontal"
+            quickBrushWindowX_land = prefs.getFloat("quick_brush_x_land", qbLegacyX)
+            quickBrushWindowY_land = prefs.getFloat("quick_brush_y_land", qbLegacyY)
+            quickBrushOrientation_land = prefs.getString("quick_brush_orientation_land", qbLegacyOrient) ?: qbLegacyOrient
+            quickBrushWindowX_port = prefs.getFloat("quick_brush_x_port", -1f)
+            quickBrushWindowY_port = prefs.getFloat("quick_brush_y_port", -1f)
+            quickBrushOrientation_port = prefs.getString("quick_brush_orientation_port", qbLegacyOrient) ?: qbLegacyOrient
+            quickBrushWindowX = if (isLand) {
+                if (quickBrushWindowX_land >= 0f) quickBrushWindowX_land else qbLegacyX
+            } else {
+                if (quickBrushWindowX_port >= 0f) quickBrushWindowX_port else qbLegacyX
+            }
+            quickBrushWindowY = if (isLand) {
+                if (quickBrushWindowY_land >= 0f) quickBrushWindowY_land else qbLegacyY
+            } else {
+                if (quickBrushWindowY_port >= 0f) quickBrushWindowY_port else qbLegacyY
+            }
+            quickBrushOrientation = if (isLand) quickBrushOrientation_land else quickBrushOrientation_port
             quickBrushCollapsed = prefs.getBoolean("quick_brush_collapsed", false)
-            quickBrushOrientation = prefs.getString("quick_brush_orientation", "horizontal") ?: "horizontal"
             quickBrushMaxLength = prefs.getInt("quick_brush_max_length", 6)
             val brushOrderStr = prefs.getString("quick_brush_order", "") ?: ""
             if (brushOrderStr.isNotBlank()) {
@@ -3435,15 +4055,66 @@ class PaintViewModel : ViewModel() {
 
             // 快捷颜色浮窗持久化恢复
             quickColorWindowOpen = prefs.getBoolean("quick_color_open", false)
-            quickColorWindowX = prefs.getFloat("quick_color_x", -1f)
-            quickColorWindowY = prefs.getFloat("quick_color_y", -1f)
+            quickColorWindowWasOpen = quickColorWindowOpen
+            val qcLegacyX = prefs.getFloat("quick_color_x", -1f)
+            val qcLegacyY = prefs.getFloat("quick_color_y", -1f)
+            quickColorWindowX_land = prefs.getFloat("quick_color_x_land", qcLegacyX)
+            quickColorWindowY_land = prefs.getFloat("quick_color_y_land", qcLegacyY)
+            quickColorWindowX_port = prefs.getFloat("quick_color_x_port", -1f)
+            quickColorWindowY_port = prefs.getFloat("quick_color_y_port", -1f)
+            quickColorWindowX = if (isLand) {
+                if (quickColorWindowX_land >= 0f) quickColorWindowX_land else qcLegacyX
+            } else {
+                if (quickColorWindowX_port >= 0f) quickColorWindowX_port else qcLegacyX
+            }
+            quickColorWindowY = if (isLand) {
+                if (quickColorWindowY_land >= 0f) quickColorWindowY_land else qcLegacyY
+            } else {
+                if (quickColorWindowY_port >= 0f) quickColorWindowY_port else qcLegacyY
+            }
             quickColorCollapsed = prefs.getBoolean("quick_color_collapsed", false)
             quickColorTab = prefs.getInt("quick_color_tab", 0)
 
+            // OKLCH 浮窗持久化恢复
+            quickOklchWindowOpen = prefs.getBoolean("quick_oklch_open", false)
+            quickOklchWindowWasOpen = quickOklchWindowOpen
+            val qoLegacyX = prefs.getFloat("quick_oklch_x", -1f)
+            val qoLegacyY = prefs.getFloat("quick_oklch_y", -1f)
+            quickOklchWindowX_land = prefs.getFloat("quick_oklch_x_land", qoLegacyX)
+            quickOklchWindowY_land = prefs.getFloat("quick_oklch_y_land", qoLegacyY)
+            quickOklchWindowX_port = prefs.getFloat("quick_oklch_x_port", -1f)
+            quickOklchWindowY_port = prefs.getFloat("quick_oklch_y_port", -1f)
+            quickOklchWindowX = if (isLand) {
+                if (quickOklchWindowX_land >= 0f) quickOklchWindowX_land else qoLegacyX
+            } else {
+                if (quickOklchWindowX_port >= 0f) quickOklchWindowX_port else qoLegacyX
+            }
+            quickOklchWindowY = if (isLand) {
+                if (quickOklchWindowY_land >= 0f) quickOklchWindowY_land else qoLegacyY
+            } else {
+                if (quickOklchWindowY_port >= 0f) quickOklchWindowY_port else qoLegacyY
+            }
+            quickOklchCollapsed = prefs.getBoolean("quick_oklch_collapsed", false)
+
             // 快捷图层浮窗持久化恢复
             quickLayerWindowOpen = prefs.getBoolean("quick_layer_open", false)
-            quickLayerWindowX = prefs.getFloat("quick_layer_x", -1f)
-            quickLayerWindowY = prefs.getFloat("quick_layer_y", -1f)
+            quickLayerWindowWasOpen = quickLayerWindowOpen
+            val qlLegacyX = prefs.getFloat("quick_layer_x", -1f)
+            val qlLegacyY = prefs.getFloat("quick_layer_y", -1f)
+            quickLayerWindowX_land = prefs.getFloat("quick_layer_x_land", qlLegacyX)
+            quickLayerWindowY_land = prefs.getFloat("quick_layer_y_land", qlLegacyY)
+            quickLayerWindowX_port = prefs.getFloat("quick_layer_x_port", -1f)
+            quickLayerWindowY_port = prefs.getFloat("quick_layer_y_port", -1f)
+            quickLayerWindowX = if (isLand) {
+                if (quickLayerWindowX_land >= 0f) quickLayerWindowX_land else qlLegacyX
+            } else {
+                if (quickLayerWindowX_port >= 0f) quickLayerWindowX_port else qlLegacyX
+            }
+            quickLayerWindowY = if (isLand) {
+                if (quickLayerWindowY_land >= 0f) quickLayerWindowY_land else qlLegacyY
+            } else {
+                if (quickLayerWindowY_port >= 0f) quickLayerWindowY_port else qlLegacyY
+            }
             quickLayerCollapsed = prefs.getBoolean("quick_layer_collapsed", false)
             quickLayerPinned = prefs.getBoolean("quick_layer_pinned", true)
 
@@ -3938,6 +4609,10 @@ class PaintViewModel : ViewModel() {
         val strokePosition: Int = 0,
         val strokeOpacity: Int = 100,
         val fillColor: Int = 0xFFFFFFFF.toInt(),
+        // 穿透混合模式 (仅组有效)。必须进镜像 state: 详情面板的开关若在
+        // 组合期直接 JNI 读, 设置后镜像 equals 不变 -> 面板重组被跳过 ->
+        // 开关显示永远不刷新 (点锁定等"真正改变镜像"的操作才会顺带刷新)
+        val passThrough: Boolean = false,
     )
 
     // ---- async render plumbing ----
@@ -3976,15 +4651,21 @@ class PaintViewModel : ViewModel() {
         viewH: Int,
     ) {
         if (viewW <= 0 || viewH <= 0) return
-        val maxTex = 4096
-        val scale =
-            if (coreW > maxTex || coreH > maxTex) {
-                minOf(maxTex.toFloat() / coreW, maxTex.toFloat() / coreH)
-            } else {
-                1f
-            }
-        val nw = maxOf(1, (coreW * scale).toInt())
-        val nh = maxOf(1, (coreH * scale).toInt())
+        // coreW/coreH 由渲染线程在换文档 (loadProject/startPainting 的 newDocument) 时写入。
+        // 在 UI 线程上读会和它竞态, 把 renderW/renderH 写回旧尺寸, 首帧瓦片与文档尺寸错位。
+        // 投递到渲染线程, 与文档尺寸变更串行执行。渲染线程还没起来时不可能有换文档在跑,
+        // 就地应用 (不能丢掉: 之后不会再有 onSizeChanged 补这一次)。
+        val h = renderHandler
+        if (h == null) {
+            applyRenderViewport()
+        } else {
+            h.post { applyRenderViewport() }
+        }
+    }
+
+    private fun applyRenderViewport() {
+        val nw = maxOf(1, coreW)
+        val nh = maxOf(1, coreH)
         if (nw != renderW || nh != renderH) {
             renderW = nw
             renderH = nh
@@ -4009,6 +4690,28 @@ class PaintViewModel : ViewModel() {
     // backBuffer is rendered into by C++ ReverieCore on the render thread.
     internal var frontBuffer: Bitmap? = null
     internal var backBuffer: Bitmap? = null
+
+    // 512 显示瓦片网格 (1:1 渲染路径的画布来源, 见 PaintViewModelTiles.kt)。
+    internal val displayTiles = DisplayTileState()
+
+    /**
+     * 画布当前有可上屏的像素: 瓦片网格已发布, 或整图路径已有 [displayBitmap]。
+     * 液化这类"必须有画布画面"的功能用它做门 —— 瓦片路径下不一定存在整图位图。
+     */
+    internal val hasDisplaySurface: Boolean
+        get() = displayTiles.drawable() != null || displayBitmap != null
+
+    // Cumulative dirty rect for large bitmap tiling (> 100MB) synchronization
+    private val largeBitmapDirtyRect = android.graphics.Rect()
+
+    internal fun consumeLargeBitmapDirtyRect(out: android.graphics.Rect): Boolean {
+        synchronized(largeBitmapDirtyRect) {
+            if (largeBitmapDirtyRect.isEmpty) return false
+            out.set(largeBitmapDirtyRect)
+            largeBitmapDirtyRect.setEmpty()
+            return true
+        }
+    }
 
     // Zero-allocation reusable canvas, rect and dirty array for buffer synchronization
     private val syncCanvas = android.graphics.Canvas()
@@ -4046,7 +4749,16 @@ class PaintViewModel : ViewModel() {
     init {
         currentInstance = this
         startRenderThread()
+        // 前缓冲内容保留能力的后台探测 (十毫秒级), 进入画布前结论早已就绪。
+        com.reverie.paint.core.stylus.FrontBufferProbe.warmUpPreservedContentCheck()
     }
+
+    /**
+     * 前缓冲真墨呈现 (续 #81) 的渲染线程接口, 由画布视图注册。core 只认 [RealInkSink],
+     * 不引用 ui 包; 为 null 时一切照旧 (主画布逐帧失效)。
+     */
+    @Volatile
+    internal var realInkSink: RealInkSink? = null
 
     var stylusDriver: com.reverie.paint.core.stylus.StylusDriver? = null
 
@@ -4216,7 +4928,31 @@ class PaintViewModel : ViewModel() {
         }
     }
 
+    // Created once per ViewModel; ticks must not capture a new runCore lambda per frame.
+    internal val liquifyMaterializeRunnable = Runnable {
+        pendingCoreOps.decrementPositive()
+        try {
+            liquifyMaterializePending = ReverieCoreBridge.liquifyMaterializeTick()
+            // The last batch can write pixels while returning pending=false.
+            if (ReverieCoreBridge.renderPendingDirty()) scheduleRender()
+        } catch (t: Throwable) {
+            android.util.Log.e("ReverieCore", "Liquid materialization failed", t)
+        } finally {
+            liquifyMaterializeGate.finish()
+        }
+    }
+
+    private val scheduledRenderTask = Runnable {
+        pendingRenderRunnable = null
+        renderScheduled = false
+        doRender()
+    }
+
+    // Separate identity preserves immediate-render cancellation semantics.
+    internal val directRenderTask = Runnable { doRender() }
+
     internal val pendingCoreOps = java.util.concurrent.atomic.AtomicInteger(0)
+    internal val pendingHistoryOps = java.util.concurrent.atomic.AtomicInteger(0)
 
     /**
      * 「帧转图层」整条链复用的中转位图(一张 ARGB_8888, 2800×1840 约 20MB)。
@@ -4267,8 +5003,11 @@ class PaintViewModel : ViewModel() {
             com.reverie.paint.model.Tool.FILL,
             com.reverie.paint.model.Tool.LASSO,
         )
-        const val PRESENT_ESTIMATE_MS = 14L // 补偿 UI draw + SurfaceFlinger 合成上屏延迟 (~1~1.5 帧 VSYNC)
-        const val PRESENT_TAIL_MS = 8L      // onDraw 提交 + HWUI/SF 合成 ~1 帧 @120Hz (保守常数)
+        const val PRESENT_ESTIMATE_MS = 8L // 普通 View 路径: UI draw + SurfaceFlinger 合成上屏延迟
+        const val PRESENT_TAIL_MS = 4L // onDraw 提交 + HWUI/SF 合成尾
+
+        /** 真墨由前缓冲直出时的上屏延迟估计 (单缓冲, 绕过 HWUI/SF 的排队)。 */
+        const val FRONT_BUFFER_PRESENT_MS = 4L
         const val STROKE_BATCH_CAPACITY = 256
         const val STROKE_SAMPLE_STRIDE = 6
 
@@ -4390,7 +5129,9 @@ class PaintViewModel : ViewModel() {
     @Volatile private var strokeBatchQueued = false
     @Volatile private var lastQueuedInputEventTime = 0L
     @Volatile private var lastQueuedUptime = 0L
-    @Volatile var lastE2ePipelineMs: Long = 40L
+    // 初值取一帧量级: 原先 40L 配合 "e2e in 5L..250L" 的更新条件, 硬笔快速运笔时实测 e2e 只有
+    // 1~4ms, 永远更新不上, 延迟估计锁死在 40 + 14 = 54ms, 预览回填窗口过大 (拐角重影)。
+    @Volatile var lastE2ePipelineMs: Long = 8L
     data class RenderedFrontier(
         val docX: Float,
         val docY: Float,
@@ -4414,6 +5155,7 @@ class PaintViewModel : ViewModel() {
 
     fun resetRenderedFrontier() {
         currentRenderedFrontier = null
+        lastE2ePipelineMs = 8L
     }
 
     fun updateRenderedFrontier(docX: Float, docY: Float, timeMs: Long) {
@@ -4428,8 +5170,10 @@ class PaintViewModel : ViewModel() {
      */
     val presentLagEstimateMs: Long
         get() {
+            // 真墨按住期间笔迹由前缓冲呈现, 不再经过主画布的 HWUI/SF 合成。
+            if (realInkSink?.wantsHold() == true) return FRONT_BUFFER_PRESENT_MS
             val measuredPresent = PerfTrace.presentWaitP50Ms
-            return if (measuredPresent in 2L..35L) {
+            return if (measuredPresent in 1L..35L) {
                 (measuredPresent + PRESENT_TAIL_MS).coerceAtLeast(PRESENT_ESTIMATE_MS)
             } else {
                 PRESENT_ESTIMATE_MS
@@ -4437,8 +5181,11 @@ class PaintViewModel : ViewModel() {
         }
 
     val effectivePipelineDelayMs: Long
-        get() = (lastE2ePipelineMs + presentLagEstimateMs).coerceIn(20L, 85L)
+        get() = (lastE2ePipelineMs + presentLagEstimateMs).coerceIn(4L, 85L)
     private var perfLogCounter = 0
+
+    /** 上一批「引擎 flush + 瓦片渲染」的实际耗时 (ns), 批内合并的触发依据。只在渲染线程读写。 */
+    private var lastStrokeBatchWorkNs = 0L
 
     private val strokeBatchRunnable = Runnable {
         val tDispatch = android.os.SystemClock.uptimeMillis()
@@ -4459,9 +5206,50 @@ class PaintViewModel : ViewModel() {
         } catch (_: Throwable) {
             false
         }
-        val dtKritaNs = android.os.SystemClock.elapsedRealtimeNanos() - tKritaStartNs
-        val dtKrita = dtKritaNs / 1_000_000L
+        var dtKritaNs = android.os.SystemClock.elapsedRealtimeNanos() - tKritaStartNs
         var dtRenderNs = 0L
+
+        // ---- 批内合并 (渲染线程) ----
+        // 上一批 (引擎 flush + 瓦片渲染) 超过一整帧 16ms 预算说明渲染线程已落后于手写采样, 队列里又积了
+        // 新样本。与其让它们各自触发一轮完整的 doRender (compositeDirtyRegions + 瓦片拷贝 + 前缓冲贴图),
+        // 不如在这里并进同一批, 只做一轮 doRender。限合并一次、最多 8 个、合并后 <= 32 个样本
+        // (与引擎 appendStrokeSample 的 32 样本分段对齐), 上屏不会被无限推迟。
+        // 只把新增样本拷到 strokeDrainCoords 头部送增量, 绝不把已画过的前 n 个点重送 (否则笔迹折返重画)。
+        // 刻意不动 strokeBatchQueued / pendingCoreOps: 为新样本投递的 runnable 稍后跑到时队列已空
+        // (n == 0, 不渲染), 退化成一次空转, 不存在"摘掉 runnable 却漏减计数"或"新样本搁浅"的竞态。
+        var lastDocX = if (n > 0) strokeDrainCoords[(n - 1) * STROKE_SAMPLE_STRIDE] else 0f
+        var lastDocY = if (n > 0) strokeDrainCoords[(n - 1) * STROKE_SAMPLE_STRIDE + 1] else 0f
+        var lastSampleTime = if (n > 0) strokeDrainTimes[n - 1] else 0L
+        var merged = 0
+        if (painted && n in 1 until STROKE_MERGE_MAX_SAMPLES &&
+            lastStrokeBatchWorkNs > STROKE_MERGE_TRIGGER_MS * 1_000_000L
+        ) {
+            var extra = 0
+            val maxExtra = minOf(8, STROKE_MERGE_MAX_SAMPLES - n)
+            synchronized(strokeBatchLock) {
+                if (strokeBatchCount in 1..maxExtra) {
+                    extra = strokeBatchCount
+                    System.arraycopy(strokeBatchCoords, 0, strokeDrainCoords, 0, extra * STROKE_SAMPLE_STRIDE)
+                    System.arraycopy(strokeBatchTimes, 0, strokeDrainTimes, 0, extra)
+                    strokeBatchCount = 0
+                }
+            }
+            if (extra > 0) {
+                lastDocX = strokeDrainCoords[(extra - 1) * STROKE_SAMPLE_STRIDE]
+                lastDocY = strokeDrainCoords[(extra - 1) * STROKE_SAMPLE_STRIDE + 1]
+                lastSampleTime = strokeDrainTimes[extra - 1]
+                val tMergeStartNs = android.os.SystemClock.elapsedRealtimeNanos()
+                try {
+                    ReverieCoreBridge.touchStrokeMoveBatch(strokeDrainCoords, extra)
+                } catch (_: Throwable) {
+                    // 与首批一致: 引擎异常不影响本帧照常渲染已落墨的部分
+                }
+                // 合并那一次的引擎耗时也算进本批, 否则度量低报
+                dtKritaNs += android.os.SystemClock.elapsedRealtimeNanos() - tMergeStartNs
+                merged = extra
+            }
+        }
+        val dtKrita = dtKritaNs / 1_000_000L
         // Render immediately in-place after ink landed to eliminate message queue roundtrip latency
         if (painted) {
             val tRenderStartNs = android.os.SystemClock.elapsedRealtimeNanos()
@@ -4470,25 +5258,25 @@ class PaintViewModel : ViewModel() {
             val dtRender = dtRenderNs / 1_000_000L
             val tDone = android.os.SystemClock.uptimeMillis()
             val queueWait = tDispatch - lastQueuedUptime
-            val e2e = if (lastQueuedInputEventTime > 0) tDone - lastQueuedInputEventTime else 0L
-            if (e2e in 5L..250L) {
-                lastE2ePipelineMs = e2e
+            val e2e =
+                if (lastQueuedInputEventTime > 0) (tDone - lastQueuedInputEventTime).coerceAtLeast(1L) else 0L
+            if (e2e in 1L..250L) {
+                // 2:1 滑动平均: 单帧抖动不直接改写延迟估计
+                lastE2ePipelineMs = ((lastE2ePipelineMs * 2L) + e2e) / 3L
             }
-            val lastSampleIdx = n - 1
-            val lastCoordIdx = lastSampleIdx * STROKE_SAMPLE_STRIDE
-            updateRenderedFrontier(
-                strokeDrainCoords[lastCoordIdx],
-                strokeDrainCoords[lastCoordIdx + 1],
-                strokeDrainTimes[lastSampleIdx]
-            )
+            updateRenderedFrontier(lastDocX, lastDocY, lastSampleTime)
 
             if (++perfLogCounter % 5 == 0) {
                 android.util.Log.i(
                     "ReveriePerf",
-                    "StrokePerf: n=$n queueWait=${queueWait}ms krita=${dtKrita}ms render=${dtRender}ms e2e=${e2e}ms effectiveDelay=${effectivePipelineDelayMs}ms presentWait=${PerfTrace.presentWaitP50Ms}ms frontierErr=${"%.1f".format(PerfTrace.frontierErrP50Px)}px"
+                    "StrokePerf: n=$n merged=$merged queueWait=${queueWait}ms krita=${dtKrita}ms " +
+                        "render=${dtRender}ms e2e=${e2e}ms effectiveDelay=${effectivePipelineDelayMs}ms " +
+                        "presentWait=${PerfTrace.presentWaitP50Ms}ms " +
+                        "frontierErr=${"%.1f".format(PerfTrace.frontierErrP50Px)}px"
                 )
             }
         }
+        lastStrokeBatchWorkNs = dtKritaNs + dtRenderNs
         if (n > 0) {
             reportRenderWorkDuration(dtKritaNs + dtRenderNs)
         }
@@ -4551,6 +5339,23 @@ class PaintViewModel : ViewModel() {
             pendingCoreOps.incrementAndGet()
             h.post(strokeBatchRunnable) // 预建 Runnable 直接投递, 每样本零分配
         }
+    }
+
+    /**
+     * 渲染线程上, 在提交 touchStrokeEnd 之前把还排在队列里的运笔补点跑完 (防御性)。
+     *
+     * 正常情况下这是空操作: 补点的 [strokeBatchRunnable] 由 UI 线程先于收尾任务投递, 按 FIFO
+     * 早已跑完。万一它排在收尾任务之后, 那一截笔尾会在笔画提交之后才进引擎 (丢墨、以错误的
+     * 合成状态重画)。只在确认 runnable 确实还在队列里时摘下来手动跑一次, 计数只减一次;
+     * API < 29 没有 hasCallbacks, 无法确认, 不做。只允许在渲染线程调用。
+     */
+    internal fun drainPendingStrokeBatchOnRenderThread() {
+        if (!strokeBatchQueued) return
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.Q) return
+        val h = renderHandler ?: return
+        if (!h.hasCallbacks(strokeBatchRunnable)) return
+        h.removeCallbacks(strokeBatchRunnable)
+        strokeBatchRunnable.run()
     }
 
     /** Drop undelivered stroke samples (cancel path: they must not reach the
@@ -4651,7 +5456,7 @@ class PaintViewModel : ViewModel() {
             pendingRenderRunnable?.let { h.removeCallbacks(it) }
             pendingRenderRunnable = null
             renderScheduled = false
-            h.post { doRender() }
+            h.post(directRenderTask)
             return
         }
         // Post immediately. The old fixed +16ms delay existed because renders
@@ -4663,22 +5468,24 @@ class PaintViewModel : ViewModel() {
         // was two full frames of constant pen latency on 120Hz panels.
         if (renderScheduled) return
         renderScheduled = true
-        val r =
-            Runnable {
-                pendingRenderRunnable = null
-                renderScheduled = false
-                doRender()
-            }
-        pendingRenderRunnable = r
-        h.post(r)
+        pendingRenderRunnable = scheduledRenderTask
+        if (!h.post(scheduledRenderTask)) {
+            pendingRenderRunnable = null
+            renderScheduled = false
+        }
     }
 
     @Volatile internal var liquifyPresentationGesture = 0L
-    internal val liquifyPresentation = com.reverie.paint.model.LiquifyPresentationFence<Bitmap>()
+    internal val liquifyPresentation = com.reverie.paint.model.LiquifyPresentationFence<Any>()
 
     internal fun onLiquifyBitmapDrawn(bitmap: Bitmap) {
         if (!liquifyPresentation.isPending(liquifyPresentationGesture)) return
         if (liquifyPresentation.consume(liquifyPresentationGesture, bitmap)) LiquifyGpuPreview.clear()
+    }
+
+    internal fun onLiquifyTilesDrawn(frame: PublishedTiles, version: Long) {
+        if (version < 0L || !frame.frameVersion.isCurrent(version)) return
+        if (liquifyPresentation.consume(liquifyPresentationGesture, frame, version)) LiquifyGpuPreview.clear()
     }
 
     internal var renderDeferCount = 0
@@ -4690,6 +5497,13 @@ class PaintViewModel : ViewModel() {
         val w = renderW
         val h = renderH
         if (w <= 0 || h <= 0) return
+        // 文档与显示缓冲 1:1 时走 512 显示瓦片网格: 一帧只 lockPixels 脏区命中的那几张瓦片,
+        // 其余瓦片的位图引用原封不动, HWUI 直接复用显存纹理。其余情况维持整图双缓冲。
+        if (shouldRenderDisplayTiles(w, h)) {
+            doRenderTiles(w, h)
+            return
+        }
+        clearDisplayTileGrid()
 
         val sizeMismatch = backBuffer == null || backBuffer?.width != w || backBuffer?.height != h
         val reallocated = sizeMismatch || displayBufferInvalid
@@ -4700,6 +5514,7 @@ class PaintViewModel : ViewModel() {
                 displayBufferInvalid = false
                 frontMissingRect.setEmpty()
                 backMissingRect.setEmpty()
+                synchronized(largeBitmapDirtyRect) { largeBitmapDirtyRect.setEmpty() }
                 hasWrittenRect = false
                 // 缓冲重分配后旧脏区已无意义, 清掉免得 UI 侧拿它做局部失效
                 renderDirtySnapshot = null
@@ -4713,6 +5528,7 @@ class PaintViewModel : ViewModel() {
                     displayBufferInvalid = false
                     frontMissingRect.setEmpty()
                     backMissingRect.setEmpty()
+                    synchronized(largeBitmapDirtyRect) { largeBitmapDirtyRect.setEmpty() }
                     hasWrittenRect = false
                     renderDirtySnapshot = null
                 } catch (retryOom: OutOfMemoryError) {
@@ -4762,7 +5578,7 @@ class PaintViewModel : ViewModel() {
         PerfTrace.tick("render.calls", 1000L)
         if (!ok) {
             if (ReverieCoreBridge.renderPendingDirty()) {
-                rh?.postDelayed({ doRender() }, 4L)
+                rh?.postDelayed(directRenderTask, 4L)
             } else if (liquifyPresentation.isPending(liquifyPresentationGesture)) {
                 displayBitmap?.let { liquifyPresentation.publish(liquifyPresentationGesture, it) }
                 com.reverie.paint.ui.painting.canvas.CanvasTouchView.activeTouchView?.invalidateFromRender()
@@ -4779,6 +5595,13 @@ class PaintViewModel : ViewModel() {
                 frontMissingRect.set(writtenLeft, writtenTop, writtenRight, writtenBottom)
             } else {
                 frontMissingRect.union(writtenLeft, writtenTop, writtenRight, writtenBottom)
+            }
+            synchronized(largeBitmapDirtyRect) {
+                if (largeBitmapDirtyRect.isEmpty) {
+                    largeBitmapDirtyRect.set(writtenLeft, writtenTop, writtenRight, writtenBottom)
+                } else {
+                    largeBitmapDirtyRect.union(writtenLeft, writtenTop, writtenRight, writtenBottom)
+                }
             }
             hasWrittenRect = true
             publishRenderDirtySnapshot()
@@ -4813,22 +5636,68 @@ class PaintViewModel : ViewModel() {
         // Direct hardware invalidate from render thread (zero Handler hop, zero frame delay).
         // 走 invalidateFromRender: 视图侧能证明画面其他部分不受影响时只失效脏区,
         // 否则 (光标/预测笔迹/旋转/大脏区等) 自动回退为整屏重绘。
+        // Compose 观察者只在回放页或参考窗口打开时通知。整图帧与瓦片帧共用这一出口。
+        // 整图路径不呈现真墨, 但要回报"这一帧没留在前缓冲上", 抬笔后的追赶清除才不会悬着。
+        realInkSink?.finishFrame(false)
+        notifyCanvasFramePublished()
+    }
+
+    /** 瓦片帧: 把本帧写入的文档矩形 `[l, t, r, b)` 发布给 UI 线程做局部失效。 */
+    internal fun publishRenderWrittenRect(l: Int, t: Int, r: Int, b: Int) {
+        renderDirty[0] = l
+        renderDirty[1] = t
+        renderDirty[2] = r - l
+        renderDirty[3] = b - t
+        hasWrittenRect = true
+        publishRenderDirtySnapshot()
+    }
+
+    /** 瓦片帧: 本帧没有写入任何像素。 */
+    internal fun clearRenderWrittenRect() {
+        hasWrittenRect = false
+        renderDirtySnapshot = null
+    }
+
+    /** 瓦片网格发布后整图 front/back 缓冲用不上了: 丢掉引用 (不 recycle, HWUI 可能还持有)。 */
+    internal fun releaseFullCanvasBuffers() {
+        val showing = displayBitmap
+        if (showing != null && (showing === frontBuffer || showing === backBuffer)) displayBitmap = null
+        frontBuffer = null
+        backBuffer = null
+        frontMissingRect.setEmpty()
+        backMissingRect.setEmpty()
+        synchronized(largeBitmapDirtyRect) { largeBitmapDirtyRect.setEmpty() }
+    }
+
+    /** 主线程上的画布失效 (预建 Runnable, 每帧投递零分配)。 */
+    private val postedCanvasInvalidate = Runnable {
+        com.reverie.paint.ui.painting.canvas.CanvasTouchView.activeTouchView?.invalidateFromRender()
+    }
+
+    /** 让画布从渲染线程失效重绘 (视图未挂上时投递到主线程)。 */
+    internal fun invalidateCanvasFromRender() {
         val tv = com.reverie.paint.ui.painting.canvas.CanvasTouchView.activeTouchView
         if (tv != null) {
             tv.invalidateFromRender()
         } else {
-            mainHandler.post {
-                com.reverie.paint.ui.painting.canvas.CanvasTouchView.activeTouchView?.invalidateFromRender()
-            }
+            mainHandler.post(postedCanvasInvalidate)
         }
-        val isStrokeActive = strokeBatchQueued || (pendingCoreOps.get() > 0)
-        if (!isStrokeActive) {
-            mainHandler.post {
-                com.reverie.paint.ui.painting.canvas.CanvasTouchView.activeTouchView?.invalidateFromRender()
-            }
-        }
+    }
 
-        // Notify Compose observers only when replay or reference window is active
+    /** 笔画批次仍在排队或引擎任务未完成 (运笔中)。 */
+    internal fun isStrokeRenderActive(): Boolean = strokeBatchQueued || (pendingCoreOps.get() > 0)
+
+    /**
+     * 新一帧像素已发布: 失效画布, 并通知参考窗口/回放页这类 Compose 观察者。与 doRender 尾部同语义。
+     * [keptOnFrontBuffer] = 这一帧已由前缓冲真墨接住, 主画布不失效 (省掉一次 HWUI 纹理上传)。
+     */
+    internal fun notifyCanvasFramePublished(keptOnFrontBuffer: Boolean = false) {
+        if (!keptOnFrontBuffer) {
+            invalidateCanvasFromRender()
+            if (!isStrokeRenderActive()) {
+                mainHandler.post(postedCanvasInvalidate)
+            }
+        }
         if (referenceWindowOpen || currentPage == Page.REPLAY) {
             mainHandler.post {
                 displayRevision++
@@ -4897,10 +5766,12 @@ class PaintViewModel : ViewModel() {
                     strokePosition = strokePosition,
                     strokeOpacity = strokeOpacity,
                     fillColor = fillColor,
+                    passThrough = ReverieCoreBridge.layerIsGroup(i) && ReverieCoreBridge.groupPassThrough(i),
                 ),
             )
         }
         layers = list
+        syncStoryboardTrackFromNative()
         currentLayerIndex = ReverieCoreBridge.currentLayerIndex()
         if (selectedLayerIndices.isNotEmpty()) {
             selectedLayerIndices = selectedLayerIndices.filter { it in 1 until n }.toSet()
@@ -4943,6 +5814,9 @@ class PaintViewModel : ViewModel() {
     // Vector outline path of the active selection (document coords centered at origin)
     var selectionOutlinePath: androidx.compose.ui.graphics.Path? by mutableStateOf(null)
     @Volatile internal var pendingSelectionOutlinePath: androidx.compose.ui.graphics.Path? = null
+
+    /** 当前笔刷的归一化轮廓多边形集合 (每个多边形为 FloatArray: [x0, y0, x1, y1, ...], 坐标在 [-1, 1]) */
+    var brushOutlinePolygons: List<FloatArray>? by mutableStateOf(null)
 
     var transformPreviewBitmap: androidx.compose.ui.graphics.ImageBitmap? by mutableStateOf(null)
     var transformCopyOnly: Boolean by mutableStateOf(false)

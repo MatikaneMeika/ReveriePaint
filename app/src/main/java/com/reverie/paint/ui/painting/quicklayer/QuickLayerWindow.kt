@@ -18,6 +18,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
@@ -43,7 +44,9 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
@@ -57,6 +60,8 @@ import androidx.compose.ui.unit.sp
 import com.reverie.paint.R
 import com.reverie.paint.core.*
 import com.reverie.paint.ui.components.PanelCloseButton
+import com.reverie.paint.ui.components.ReDropdownMenu
+import com.reverie.paint.ui.components.ReDropdownMenuItem
 import com.reverie.paint.ui.components.pressScale
 import com.reverie.paint.ui.painting.layers.LightCheckerboard
 import com.reverie.paint.ui.painting.layers.layerDisplayName
@@ -94,54 +99,29 @@ fun QuickLayerWindow(
     opacity: Float = 0.94f,
     onClose: () -> Unit,
     onOpenFullLayerPanel: () -> Unit,
+    onOpenLayerDetails: (Long) -> Unit = { onOpenFullLayerPanel() },
 ) {
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
+    val configuration = LocalConfiguration.current
     val density = LocalDensity.current
+    val windowHeight = with(density) { LocalWindowInfo.current.containerSize.height.toDp() }
 
     val isCollapsed = vm.quickLayerCollapsed
+    val selectedLayer = vm.layers.firstOrNull { it.index == vm.currentLayerIndex }
     var windowSize by remember { mutableStateOf(IntSize.Zero) }
 
-    val dm = context.resources.displayMetrics
-    val screenWidthPx = dm.widthPixels.toFloat()
-    val screenHeightPx = dm.heightPixels.toFloat()
-
-    val currentScreenWidthPx by rememberUpdatedState(screenWidthPx)
-    val currentScreenHeightPx by rememberUpdatedState(screenHeightPx)
+    val screenWidthPx = with(density) { configuration.screenWidthDp.dp.toPx() }
+    val screenHeightPx = with(density) { configuration.screenHeightDp.dp.toPx() }
 
     val marginPx = with(density) { 8.dp.toPx() }
     val defaultW = with(density) { if (isCollapsed) 48.dp.toPx() else 156.dp.toPx() }
     val defaultH = with(density) { if (isCollapsed) 48.dp.toPx() else 290.dp.toPx() }
 
-    // 屏幕尺寸变化时的出界夹紧
-    LaunchedEffect(screenWidthPx, screenHeightPx, windowSize, isCollapsed) {
-        val curEffectiveW = if (windowSize.width > 0) windowSize.width.toFloat() else defaultW
-        val curEffectiveH = if (windowSize.height > 0) windowSize.height.toFloat() else defaultH
-        val minX = marginPx
-        val maxX = (screenWidthPx - curEffectiveW - marginPx).coerceAtLeast(minX)
-        val minY = marginPx
-        val maxY = (screenHeightPx - curEffectiveH - marginPx).coerceAtLeast(minY)
-        if (vm.quickLayerWindowX >= 0f && vm.quickLayerWindowY >= 0f) {
-            val clampedX = vm.quickLayerWindowX.coerceIn(minX, maxX)
-            val clampedY = vm.quickLayerWindowY.coerceIn(minY, maxY)
-            if (clampedX != vm.quickLayerWindowX || clampedY != vm.quickLayerWindowY) {
-                vm.quickLayerWindowX = clampedX
-                vm.quickLayerWindowY = clampedY
-                vm.persistQuickLayerState()
-            }
-        }
-    }
-
     val windowShape = remember(isCollapsed) {
         if (isCollapsed) CircleShape else RoundedCornerShape(16.dp)
     }
 
-    DisposableEffect(Unit) {
-        onDispose {
-            vm.quickLayerWindowWidth = 0f
-            vm.quickLayerWindowHeight = 0f
-        }
-    }
 
     // 层次排序逻辑 (倒序排列保持树形完整，顶层在最上方)
     val displayLayers = remember(vm.layers, vm.collapsedGroupNames) {
@@ -159,9 +139,17 @@ fun QuickLayerWindow(
             for (j in siblings.reversed()) {
                 val c = vm.layers[j]
                 out.add(c)
-                if (c.isGroup && c.name !in vm.collapsedGroupNames) {
+                if (c.isGroup) {
+                    if (c.name !in vm.collapsedGroupNames) {
+                        val e = (j + 1 until hi).firstOrNull { vm.layers[it].depth <= c.depth } ?: hi
+                        collectBlock(j + 1, e, c.depth, out)
+                    }
+                } else {
+                    // 非组图层 (如拥有透明度蒙版/滤镜蒙版的图层): 若存在子级项，直接递归收集
                     val e = (j + 1 until hi).firstOrNull { vm.layers[it].depth <= c.depth } ?: hi
-                    collectBlock(j + 1, e, c.depth, out)
+                    if (e > j + 1) {
+                        collectBlock(j + 1, e, c.depth, out)
+                    }
                 }
             }
         }
@@ -175,21 +163,17 @@ fun QuickLayerWindow(
     Box(
         modifier = modifier
             .offset {
-                val curEffectiveW = if (windowSize.width > 0) windowSize.width.toFloat() else defaultW
-                val curEffectiveH = if (windowSize.height > 0) windowSize.height.toFloat() else defaultH
-                val minX = marginPx
-                val maxX = (screenWidthPx - curEffectiveW - marginPx).coerceAtLeast(minX)
-                val minY = marginPx
-                val maxY = (screenHeightPx - curEffectiveH - marginPx).coerceAtLeast(minY)
                 val x = if (vm.quickLayerWindowX >= 0f) {
-                    vm.quickLayerWindowX.coerceIn(minX, maxX).roundToInt()
+                    vm.quickLayerWindowX.roundToInt()
                 } else {
-                    ((screenWidthPx - curEffectiveW) - marginPx * 2f).coerceIn(minX, maxX).roundToInt()
+                    val curW = if (windowSize.width > 0) windowSize.width.toFloat() else defaultW
+                    ((screenWidthPx - curW) / 2f).coerceAtLeast(0f).roundToInt()
                 }
                 val y = if (vm.quickLayerWindowY >= 0f) {
-                    vm.quickLayerWindowY.coerceIn(minY, maxY).roundToInt()
+                    vm.quickLayerWindowY.roundToInt()
                 } else {
-                    ((screenHeightPx - curEffectiveH) / 2f).coerceIn(minY, maxY).roundToInt()
+                    val curH = if (windowSize.height > 0) windowSize.height.toFloat() else defaultH
+                    ((screenHeightPx - curH) / 2f).coerceAtLeast(0f).roundToInt()
                 }
                 IntOffset(x, y)
             }
@@ -200,25 +184,6 @@ fun QuickLayerWindow(
                     windowSize = size
                     vm.quickLayerWindowWidth = size.width.toFloat()
                     vm.quickLayerWindowHeight = size.height.toFloat()
-                    if (size.width > 0 && size.height > 0) {
-                        val minX = marginPx
-                        val maxX = (screenWidthPx - size.width - marginPx).coerceAtLeast(minX)
-                        val minY = marginPx
-                        val maxY = (screenHeightPx - size.height - marginPx).coerceAtLeast(minY)
-                        if (vm.quickLayerWindowX < 0f || vm.quickLayerWindowY < 0f) {
-                            vm.quickLayerWindowX = (maxX - marginPx * 2f).coerceIn(minX, maxX)
-                            vm.quickLayerWindowY = (maxY / 2f).coerceIn(minY, maxY)
-                            vm.persistQuickLayerState()
-                        } else {
-                            val clampedX = vm.quickLayerWindowX.coerceIn(minX, maxX)
-                            val clampedY = vm.quickLayerWindowY.coerceIn(minY, maxY)
-                            if (clampedX != vm.quickLayerWindowX || clampedY != vm.quickLayerWindowY) {
-                                vm.quickLayerWindowX = clampedX
-                                vm.quickLayerWindowY = clampedY
-                                vm.persistQuickLayerState()
-                            }
-                        }
-                    }
                 }
                 .shadow(14.dp, windowShape)
                 .systemHoverIcon(context)
@@ -243,18 +208,22 @@ fun QuickLayerWindow(
                         .size(46.dp)
                         .pointerInput(Unit) {
                             detectDragGestures(
+                                onDragStart = {
+                                    val curW = if (windowSize.width > 0) windowSize.width.toFloat() else defaultW
+                                    val curH = if (windowSize.height > 0) windowSize.height.toFloat() else defaultH
+                                    if (vm.quickLayerWindowX < 0f) {
+                                        vm.quickLayerWindowX = ((screenWidthPx - curW) / 2f).coerceAtLeast(0f)
+                                    }
+                                    if (vm.quickLayerWindowY < 0f) {
+                                        vm.quickLayerWindowY = ((screenHeightPx - curH) / 2f).coerceAtLeast(0f)
+                                    }
+                                },
                                 onDragEnd = { vm.persistQuickLayerState() },
                                 onDragCancel = { vm.persistQuickLayerState() },
                             ) { change, dragAmount ->
                                 change.consume()
-                                val curEffectiveW = if (windowSize.width > 0) windowSize.width.toFloat() else defaultW
-                                val curEffectiveH = if (windowSize.height > 0) windowSize.height.toFloat() else defaultH
-                                val curMinX = marginPx
-                                val curMaxX = (currentScreenWidthPx - curEffectiveW - marginPx).coerceAtLeast(curMinX)
-                                val curMinY = marginPx
-                                val curMaxY = (currentScreenHeightPx - curEffectiveH - marginPx).coerceAtLeast(curMinY)
-                                vm.quickLayerWindowX = (vm.quickLayerWindowX + dragAmount.x).coerceIn(curMinX, curMaxX)
-                                vm.quickLayerWindowY = (vm.quickLayerWindowY + dragAmount.y).coerceIn(curMinY, curMaxY)
+                                vm.quickLayerWindowX += dragAmount.x
+                                vm.quickLayerWindowY += dragAmount.y
                             }
                         }
                         .clickable {
@@ -300,50 +269,61 @@ fun QuickLayerWindow(
                         .padding(bottom = 6.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
-                    // 1. 顶部操作栏 (拖动手柄 + 新建图层 + 新建组 + 关闭按钮)
+                    // 1. 顶部操作栏 (新建图层 / 更多操作菜单 / 居中拖动手柄 / 关闭按钮 - 极简单层结构)
+                    var showQuickMenu by remember { mutableStateOf(false) }
+
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(38.dp)
                             .pointerInput(Unit) {
                                 detectDragGestures(
+                                    onDragStart = {
+                                        val curW = if (windowSize.width > 0) windowSize.width.toFloat() else defaultW
+                                        val curH = if (windowSize.height > 0) windowSize.height.toFloat() else defaultH
+                                        if (vm.quickLayerWindowX < 0f) {
+                                            vm.quickLayerWindowX = ((screenWidthPx - curW) / 2f).coerceAtLeast(0f)
+                                        }
+                                        if (vm.quickLayerWindowY < 0f) {
+                                            vm.quickLayerWindowY = ((screenHeightPx - curH) / 2f).coerceAtLeast(0f)
+                                        }
+                                    },
                                     onDragEnd = { vm.persistQuickLayerState() },
                                     onDragCancel = { vm.persistQuickLayerState() },
                                 ) { change, dragAmount ->
                                     change.consume()
-                                    val curEffectiveW = if (windowSize.width > 0) windowSize.width.toFloat() else defaultW
-                                    val curEffectiveH = if (windowSize.height > 0) windowSize.height.toFloat() else defaultH
-                                    val curMinX = marginPx
-                                    val curMaxX = (currentScreenWidthPx - curEffectiveW - marginPx).coerceAtLeast(curMinX)
-                                    val curMinY = marginPx
-                                    val curMaxY = (currentScreenHeightPx - curEffectiveH - marginPx).coerceAtLeast(curMinY)
-                                    vm.quickLayerWindowX = (vm.quickLayerWindowX + dragAmount.x).coerceIn(curMinX, curMaxX)
-                                    vm.quickLayerWindowY = (vm.quickLayerWindowY + dragAmount.y).coerceIn(curMinY, curMaxY)
+                                    vm.quickLayerWindowX += dragAmount.x
+                                    vm.quickLayerWindowY += dragAmount.y
                                 }
                             }
                             .padding(horizontal = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween,
                     ) {
-                        // 左侧操作按钮组: [+] 新建图层 / [📁] 新建组
+                        // 左侧操作按钮组: [+] 新建图层 (短按新建, 长按呼出更多菜单) + [···] 更多操作
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(2.dp),
                         ) {
                             // [+] 新建图层
                             val addSource = remember { MutableInteractionSource() }
                             Box(
                                 modifier = Modifier
-                                    .size(26.dp)
+                                    .size(28.dp)
                                     .pressScale(addSource)
                                     .clip(RoundedCornerShape(6.dp))
-                                    .clickable(
+                                    .combinedClickable(
                                         interactionSource = addSource,
                                         indication = null,
-                                    ) {
-                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                        vm.addLayer()
-                                    },
+                                        onClick = {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            vm.addLayer()
+                                        },
+                                        onLongClick = {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            showQuickMenu = true
+                                        },
+                                    ),
                                 contentAlignment = Alignment.Center,
                             ) {
                                 Icon(
@@ -354,28 +334,119 @@ fun QuickLayerWindow(
                                 )
                             }
 
-                            // [📁] 新建组
-                            val folderSource = remember { MutableInteractionSource() }
-                            Box(
-                                modifier = Modifier
-                                    .size(26.dp)
-                                    .pressScale(folderSource)
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .clickable(
-                                        interactionSource = folderSource,
-                                        indication = null,
-                                    ) {
-                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                        vm.addGroupLayer()
-                                    },
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Icon(
-                                    painter = painterResource(R.drawable.ic_folder),
-                                    contentDescription = stringResource(R.string.layer_add_group),
-                                    tint = Morandi.icon,
-                                    modifier = Modifier.size(16.dp),
-                                )
+                            // [···] 更多图层操作菜单
+                            Box {
+                                val moreSource = remember { MutableInteractionSource() }
+                                Box(
+                                    modifier = Modifier
+                                        .size(28.dp)
+                                        .pressScale(moreSource)
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .clickable(
+                                            interactionSource = moreSource,
+                                            indication = null,
+                                        ) {
+                                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                            showQuickMenu = true
+                                        },
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Icon(
+                                        painter = painterResource(R.drawable.ic_dots_vertical),
+                                        contentDescription = stringResource(R.string.quick_layer_more_options),
+                                        tint = Morandi.icon,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                }
+
+                                val canChangeClipping = selectedLayer != null && !selectedLayer.isBackground &&
+                                    selectedLayer.index > 0 && selectedLayer.nodeType !in 10..13
+
+                                ReDropdownMenu(
+                                    expanded = showQuickMenu,
+                                    onDismissRequest = { showQuickMenu = false },
+                                    modifier = Modifier.width(180.dp),
+                                ) {
+                                    // 1. 新建组
+                                    ReDropdownMenuItem(
+                                        text = stringResource(R.string.layer_add_group),
+                                        icon = R.drawable.ic_folder_plus,
+                                        onClick = {
+                                            showQuickMenu = false
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            vm.addGroupLayer()
+                                        },
+                                    )
+
+                                    // 分割线
+                                    Box(
+                                        modifier = Modifier
+                                            .padding(horizontal = 10.dp, vertical = 4.dp)
+                                            .fillMaxWidth()
+                                            .height(0.5.dp)
+                                            .background(Morandi.border.copy(alpha = 0.25f))
+                                    )
+
+                                    // 2. 剪贴蒙版开关
+                                    val isClipped = selectedLayer?.clipped == true
+                                    ReDropdownMenuItem(
+                                        text = stringResource(R.string.layer_op_clip),
+                                        icon = R.drawable.ic_clip,
+                                        selected = isClipped,
+                                        onClick = {
+                                            showQuickMenu = false
+                                            if (canChangeClipping) {
+                                                vm.layers.firstOrNull {
+                                                    it.index == vm.currentLayerIndex && it.index > 0 &&
+                                                        !it.isBackground && it.nodeType !in 10..13
+                                                }?.let {
+                                                    vm.setLayerClipped(it.index, !it.clipped)
+                                                }
+                                            }
+                                        },
+                                    )
+
+                                    // 3. 锁定透明度 / 继承透明度开关
+                                    val isAlphaInherited = selectedLayer?.alphaInherited == true
+                                    ReDropdownMenuItem(
+                                        text = stringResource(R.string.layer_op_alpha_inherit),
+                                        icon = R.drawable.ic_alpha_inherit,
+                                        selected = isAlphaInherited,
+                                        onClick = {
+                                            showQuickMenu = false
+                                            if (canChangeClipping) {
+                                                vm.layers.firstOrNull {
+                                                    it.index == vm.currentLayerIndex && it.index > 0 &&
+                                                        !it.isBackground && it.nodeType !in 10..13
+                                                }?.let {
+                                                    vm.setLayerAlphaInherited(it.index, !it.alphaInherited)
+                                                }
+                                            }
+                                        },
+                                    )
+
+                                    // 4. 图层详情设置
+                                    if (selectedLayer != null) {
+                                        Box(
+                                            modifier = Modifier
+                                                .padding(horizontal = 10.dp, vertical = 4.dp)
+                                                .fillMaxWidth()
+                                                .height(0.5.dp)
+                                                .background(Morandi.border.copy(alpha = 0.25f))
+                                        )
+
+                                        ReDropdownMenuItem(
+                                            text = stringResource(R.string.layer_settings_title),
+                                            icon = R.drawable.ic_sliders,
+                                            onClick = {
+                                                showQuickMenu = false
+                                                vm.layers.firstOrNull { it.index == vm.currentLayerIndex }?.let {
+                                                    onOpenLayerDetails(it.id)
+                                                }
+                                            },
+                                        )
+                                    }
+                                }
                             }
                         }
 
@@ -388,7 +459,7 @@ fun QuickLayerWindow(
                                 .background(Morandi.icon.copy(alpha = 0.3f))
                         )
 
-                        // 右侧：优雅关闭按钮 (替换原先多余的钉子图标)
+                        // 右侧：优雅关闭按钮
                         PanelCloseButton(onClose = onClose)
                     }
 
@@ -401,15 +472,14 @@ fun QuickLayerWindow(
                     )
 
                     // 2. 纵向图层列表 (每个图层高度 46dp, 独立左侧眼睛显隐区 + 右侧预览区与名称)
-                    var selectedIndex by remember(vm.currentLayerIndex) { mutableIntStateOf(vm.currentLayerIndex) }
 
                     LazyColumn(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .heightIn(max = 280.dp),
+                            .heightIn(max = (windowHeight - 120.dp).coerceIn(46.dp, 280.dp)),
                     ) {
                         items(displayLayers, key = { it.id }) { layer ->
-                            val isSelected = layer.index == selectedIndex
+                            val isSelected = layer.index == vm.currentLayerIndex
                             val rowSource = remember { MutableInteractionSource() }
                             val labelColor = if (layer.colorLabel > 0) layerLabelColor(layer.colorLabel) else Color.Transparent
 
@@ -503,8 +573,14 @@ fun QuickLayerWindow(
                                                 indication = null,
                                             ) {
                                                 haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                                selectedIndex = layer.index
-                                                vm.setCurrentLayer(layer.index)
+                                                // Resolve the stable ID again: indices can change after delete/undo.
+                                                vm.layers.firstOrNull { it.id == layer.id }?.let { current ->
+                                                    if (current.index == vm.currentLayerIndex) {
+                                                        onOpenLayerDetails(current.id)
+                                                    } else {
+                                                        vm.setCurrentLayer(current.index)
+                                                    }
+                                                }
                                             },
                                         contentAlignment = Alignment.CenterStart,
                                     ) {
@@ -589,6 +665,72 @@ fun QuickLayerWindow(
                                                         tint = if (isSelected) (if (layer.colorLabel > 0) labelColor else Morandi.accent) else Morandi.icon,
                                                         modifier = Modifier.size(16.dp),
                                                     )
+                                                    Text(
+                                                        text = layerDisplayName(layer.name),
+                                                        fontSize = 11.sp,
+                                                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                                                        color = Morandi.text,
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis,
+                                                        modifier = Modifier.weight(1f),
+                                                    )
+                                                }
+                                            }
+
+                                            // ---- 蒙版 (透明度蒙版 / 滤镜蒙版等) ----
+                                            com.reverie.paint.model.LayerNodeType.isMask(layer.nodeType) -> {
+                                                Row(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .padding(horizontal = 6.dp),
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                                ) {
+                                                    Icon(
+                                                        painter = painterResource(R.drawable.ic_crop),
+                                                        contentDescription = stringResource(R.string.layer_tag_mask_prefix),
+                                                        tint = if (layer.colorLabel > 0) labelColor else Morandi.accent,
+                                                        modifier = Modifier.size(12.dp),
+                                                    )
+
+                                                    // 蒙版缩略图
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .size(32.dp, 26.dp)
+                                                            .clip(RoundedCornerShape(4.dp))
+                                                            .border(
+                                                                0.5.dp,
+                                                                thumbBorderColor,
+                                                                RoundedCornerShape(4.dp),
+                                                            ),
+                                                        contentAlignment = Alignment.Center,
+                                                    ) {
+                                                        LightCheckerboard(Modifier.fillMaxSize())
+                                                        val thumb = vm.thumbFor(layer.index, layer.name)
+                                                        if (thumb != null && !thumb.isRecycled) {
+                                                            Image(
+                                                                bitmap = thumb.asImageBitmap(),
+                                                                contentDescription = layer.name,
+                                                                modifier = Modifier.fillMaxSize(),
+                                                            )
+                                                        } else {
+                                                            Box(
+                                                                modifier = Modifier
+                                                                    .fillMaxSize()
+                                                                    .background(Morandi.accent.copy(alpha = 0.15f)),
+                                                                contentAlignment = Alignment.Center,
+                                                            ) {
+                                                                Icon(
+                                                                    painterResource(R.drawable.ic_crop),
+                                                                    contentDescription = null,
+                                                                    tint = Morandi.accent,
+                                                                    modifier = Modifier.size(16.dp),
+                                                                )
+                                                            }
+                                                        }
+                                                    }
+
+                                                    // 蒙版名称
                                                     Text(
                                                         text = layerDisplayName(layer.name),
                                                         fontSize = 11.sp,
@@ -742,3 +884,4 @@ fun QuickLayerWindow(
         }
     }
 }
+

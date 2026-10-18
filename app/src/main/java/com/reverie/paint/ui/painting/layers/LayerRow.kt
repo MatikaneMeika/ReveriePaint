@@ -269,7 +269,8 @@ internal fun LayerRow(
                             null
                         }
 
-                        if (earlyExit == null && !isDrawerOpen) {
+                        val isMask = com.reverie.paint.model.LayerNodeType.isMask(layer.nodeType)
+                        if (earlyExit == null && !isDrawerOpen && !isMask) {
                             // Phase 2: EXACTLY 300ms elapsed without movement exceeding slop -> TRIGGER DRAG!
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             scope.launch { rowInteraction.emit(androidx.compose.foundation.interaction.PressInteraction.Cancel(press)) }
@@ -298,14 +299,15 @@ internal fun LayerRow(
 
                             lastChange.consume()
                             val initDx = lastChange.position.x - startX
-                            if (initDx > 0 && startOffset >= -selectThresholdPx) {
+                            val isRightSwipe = initDx > 0 && startOffset >= -selectThresholdPx && !isMask
+                            if (isRightSwipe) {
                                 scope.launch { revealAnim.snapTo(initDx.coerceIn(0f, selectMaxPx.toFloat())) }
                                 if (initDx > selectThresholdPx && !selectTriggered) {
                                     selectTriggered = true
                                     haptic.performHapticFeedback(HapticFeedbackType.ContextClick)
                                     onSelect()
                                 }
-                            } else {
+                            } else if (!isRightSwipe && initDx < 0) {
                                 scope.launch { revealAnim.snapTo((startOffset + initDx).coerceIn(-drawerPx.toFloat(), 0f)) }
                             }
 
@@ -322,14 +324,14 @@ internal fun LayerRow(
                                 velocityX = ((currentX - prevX) / dt * 1000f).coerceIn(-5000f, 5000f)
                                 prevX = currentX
                                 prevTimeNs = nowNs
-                                if (dx > 0 && startOffset >= -selectThresholdPx) {
+                                if (dx > 0 && startOffset >= -selectThresholdPx && !isMask) {
                                     scope.launch { revealAnim.snapTo(dx.coerceIn(0f, selectMaxPx.toFloat())) }
                                     if (dx > selectThresholdPx && !selectTriggered) {
                                         selectTriggered = true
                                         haptic.performHapticFeedback(HapticFeedbackType.ContextClick)
                                         onSelect()
                                     }
-                                } else {
+                                } else if (dx < 0 || !isMask) {
                                     scope.launch { revealAnim.snapTo((startOffset + dx).coerceIn(-drawerPx.toFloat(), 0f)) }
                                 }
                             }
@@ -463,16 +465,30 @@ internal fun LayerRow(
                         .width(drawerWidth)
                         .fillMaxHeight(),
             ) {
-                DrawerAction(Modifier.weight(1f), Morandi.panelHi, R.drawable.ic_copy, stringResource(R.string.common_copy)) {
-                    vm.copyLayer(index)
-                    onRevealClose()
-                }
-                DrawerAction(Modifier.weight(1f), Morandi.accent, R.drawable.ic_eye, stringResource(R.string.layer_drawer_solo)) {
-                    vm.soloLayer(index)
-                    onRevealClose()
+                val isMask = com.reverie.paint.model.LayerNodeType.isMask(layer.nodeType)
+                if (!isMask) {
+                    DrawerAction(Modifier.weight(1f), Morandi.panelHi, R.drawable.ic_copy, stringResource(R.string.common_copy)) {
+                        vm.copyLayer(index)
+                        onRevealClose()
+                    }
+                    DrawerAction(Modifier.weight(1f), Morandi.accent, R.drawable.ic_eye, stringResource(R.string.layer_drawer_solo)) {
+                        vm.soloLayer(index)
+                        onRevealClose()
+                    }
+                } else {
+                    DrawerAction(Modifier.weight(1f), Morandi.panelHi, R.drawable.ic_image_adjust, stringResource(R.string.layer_op_invert_mask)) {
+                        vm.invertMask(index)
+                        onRevealClose()
+                    }
+                    DrawerAction(Modifier.weight(1f), Morandi.accent, R.drawable.ic_fill, stringResource(R.string.layer_op_apply_mask)) {
+                        vm.applyMask(index)
+                        onRevealClose()
+                    }
                 }
                 DrawerAction(Modifier.weight(1f), Color(0xFFB05552), R.drawable.ic_trash, stringResource(R.string.common_delete)) {
-                    if (!isBg) vm.removeLayer(index)
+                    if (!isBg) {
+                        if (isMask) vm.removeMask(index) else vm.removeLayer(index)
+                    }
                     onRevealClose()
                 }
             }
@@ -594,6 +610,7 @@ internal fun LayerRowContent(
         ) {
             LightCheckerboard(Modifier.fillMaxSize())
             val isFilter = layer.nodeType == 3
+            val isMask = com.reverie.paint.model.LayerNodeType.isMask(layer.nodeType)
             if (isFilter) {
                 Box(
                     modifier = Modifier
@@ -607,6 +624,29 @@ internal fun LayerRowContent(
                         tint = Morandi.accent,
                         modifier = Modifier.size(20.dp),
                     )
+                }
+            } else if (isMask) {
+                val thumb = vm.thumbFor(layer.index, layer.name)
+                if (thumb != null && !thumb.isRecycled) {
+                    Image(
+                        bitmap = thumb.asImageBitmap(),
+                        contentDescription = stringResource(R.string.layer_thumbnail),
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Morandi.accent.copy(alpha = 0.15f)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            painterResource(R.drawable.ic_crop),
+                            contentDescription = stringResource(R.string.layer_op_add_mask),
+                            tint = Morandi.accent,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
                 }
             } else {
                 val thumb = vm.thumbFor(layer.index, layer.name)
@@ -752,17 +792,27 @@ internal fun LayerRowContent(
             }
             val blendName = stringResource(blendModeResId(layer.blendMode))
             val isStroke = layer.isStrokeLayer || layer.nodeType == 6
-            val isSpecial = layer.nodeType == 2 || layer.nodeType == 3 || isStroke
+            val isMask = com.reverie.paint.model.LayerNodeType.isMask(layer.nodeType)
+            val isSpecial = layer.nodeType == 2 || layer.nodeType == 3 || isStroke || isMask
             val modified = layer.opacity < 0.999f || layer.blendMode != "normal" || isSpecial
             if (modified) {
                 val tag = when {
                     layer.nodeType == 2 -> stringResource(R.string.layer_tag_fill_prefix)
                     layer.nodeType == 3 -> stringResource(R.string.layer_tag_filter_prefix)
                     isStroke -> stringResource(R.string.layer_tag_stroke_prefix)
+                    layer.nodeType == com.reverie.paint.model.LayerNodeType.SELECTION_MASK -> stringResource(R.string.layer_tag_selection_mask_prefix)
+                    layer.nodeType == com.reverie.paint.model.LayerNodeType.FILTER_MASK -> stringResource(R.string.layer_tag_filter_mask_prefix)
+                    layer.nodeType == com.reverie.paint.model.LayerNodeType.TRANSFORM_MASK -> stringResource(R.string.layer_tag_transform_mask_prefix)
+                    isMask -> stringResource(R.string.layer_tag_mask_prefix)
                     else -> ""
                 }
+                val desc = if (isMask) {
+                    "$tag${(layer.opacity * 100).roundToInt()}%"
+                } else {
+                    "$tag${(layer.opacity * 100).roundToInt()}% · $blendName"
+                }
                 Text(
-                    text = "$tag${(layer.opacity * 100).roundToInt()}% · $blendName",
+                    text = desc,
                     color = Morandi.subText,
                     fontSize = 10.sp,
                     maxLines = 1,

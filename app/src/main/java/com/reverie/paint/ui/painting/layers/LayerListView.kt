@@ -189,9 +189,12 @@ internal fun LayerListView(
                 for (j in siblings.reversed()) {
                     val c = vm.layers[j]
                     out.add(c)
-                    if (c.isGroup && c.name !in collapsedGroupNames) {
+                    val isCollapsedGroup = c.isGroup && c.name in collapsedGroupNames
+                    if (!isCollapsedGroup) {
                         val e = (j + 1 until hi).firstOrNull { vm.layers[it].depth <= c.depth } ?: hi
-                        collectBlock(j + 1, e, c.depth, out)
+                        if (e > j + 1) {
+                            collectBlock(j + 1, e, c.depth, out)
+                        }
                     }
                 }
             }
@@ -583,7 +586,17 @@ internal fun LayerListView(
                     ReDropdownMenu(
                         expanded = showNewLayerMenu,
                         onDismissRequest = { showNewLayerMenu = false },
+                        modifier = Modifier.width(190.dp),
                     ) {
+                        // --- 1. 特殊图层类型板块 ---
+                        Text(
+                            text = stringResource(R.string.layer_menu_section_layers),
+                            color = Morandi.subText,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            letterSpacing = 0.5.sp,
+                            modifier = Modifier.padding(start = 14.dp, end = 14.dp, top = 6.dp, bottom = 4.dp),
+                        )
                         ReDropdownMenuItem(
                             text = stringResource(R.string.layer_type_fill),
                             icon = R.drawable.ic_fill,
@@ -618,6 +631,83 @@ internal fun LayerListView(
                                     vm.addStrokeLayer()
                                 }
                             },
+                        )
+
+                        // 柔和分割线
+                        Box(
+                            modifier = Modifier
+                                .padding(horizontal = 12.dp, vertical = 6.dp)
+                                .fillMaxWidth()
+                                .height(0.5.dp)
+                                .background(Morandi.border.copy(alpha = 0.25f))
+                        )
+
+                        // --- 2. 蒙版板块 ---
+                        Text(
+                            text = stringResource(R.string.layer_menu_section_masks),
+                            color = Morandi.subText,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            letterSpacing = 0.5.sp,
+                            modifier = Modifier.padding(start = 14.dp, end = 14.dp, top = 2.dp, bottom = 4.dp),
+                        )
+                        val curIdx = vm.currentLayerIndex
+                        val curLayer = vm.layers.getOrNull(curIdx)
+                        val isBg = curLayer?.isBackground == true
+                        val isFilter = curLayer?.nodeType == 3
+
+                        ReDropdownMenuItem(
+                            text = stringResource(R.string.layer_op_add_mask),
+                            icon = R.drawable.ic_crop,
+                            onClick = {
+                                showNewLayerMenu = false
+                                val now = System.currentTimeMillis()
+                                if (now - lastLayerOpTime > 350L) {
+                                    lastLayerOpTime = now
+                                    if (curIdx > 0 && curIdx < vm.layers.size && !isBg && !isFilter) {
+                                        vm.addMaskToLayer(curIdx, com.reverie.paint.model.LayerMaskType.TRANSPARENCY)
+                                    }
+                                }
+                            },
+                        )
+                        ReDropdownMenuItem(
+                            text = stringResource(R.string.layer_op_add_selection_mask),
+                            icon = R.drawable.ic_select,
+                            onClick = {
+                                showNewLayerMenu = false
+                                val now = System.currentTimeMillis()
+                                if (now - lastLayerOpTime > 350L) {
+                                    lastLayerOpTime = now
+                                    if (!vm.hasSelection) {
+                                        android.widget.Toast.makeText(
+                                            context,
+                                            context.getString(R.string.layer_mask_toast_no_selection),
+                                            android.widget.Toast.LENGTH_SHORT
+                                        ).show()
+                                    } else if (curIdx > 0 && curIdx < vm.layers.size && !isBg && !isFilter) {
+                                        vm.addMaskToLayer(curIdx, com.reverie.paint.model.LayerMaskType.SELECTION)
+                                    }
+                                }
+                            },
+                        )
+
+                        // 柔和分割线
+                        Box(
+                            modifier = Modifier
+                                .padding(horizontal = 12.dp, vertical = 6.dp)
+                                .fillMaxWidth()
+                                .height(0.5.dp)
+                                .background(Morandi.border.copy(alpha = 0.25f))
+                        )
+
+                        // --- 3. 快捷生成板块 ---
+                        Text(
+                            text = stringResource(R.string.layer_menu_section_actions),
+                            color = Morandi.subText,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            letterSpacing = 0.5.sp,
+                            modifier = Modifier.padding(start = 14.dp, end = 14.dp, top = 2.dp, bottom = 4.dp),
                         )
                         ReDropdownMenuItem(
                             text = stringResource(R.string.layer_stamp_visible),
@@ -710,6 +800,8 @@ internal fun LayerListView(
         val maxListH = (cfg.screenHeightDp * 3 / 4 - 56).dp
         val targetListH = (rowHeight * vm.layers.size.toFloat()).coerceAtMost(maxListH)
         val listH by animateDpAsState(targetListH, tween(200), label = "listH")
+        // 双指捏合合并 Toast 文案在组合期解析 (Lint: LocalContextGetResourceValueCall)
+        val pinchMergedMsg = stringResource(R.string.layer_toast_pinch_merged)
         Box(
             modifier =
                 Modifier
@@ -782,7 +874,7 @@ internal fun LayerListView(
                                                     p2.consume()
                                                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                                     vm.mergeDown(upperLayer.index)
-                                                    vm.showActionToast(context.getString(R.string.layer_toast_pinch_merged), com.reverie.paint.R.drawable.ic_merge_down)
+                                                    vm.showActionToast(pinchMergedMsg, com.reverie.paint.R.drawable.ic_merge_down)
                                                 }
                                             }
                                         }

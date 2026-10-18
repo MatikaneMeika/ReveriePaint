@@ -8,9 +8,11 @@
  * ReverieCoreInternal.h, public API in ReverieCore.h)
  * ============================================================ */
 #include "ReverieCoreInternal.h"
+#include "ReverieCoreUndoStore.h"
 #include "PixelAlpha.h"
 #include "PixelRegion.h"
 #include "LiquifyMaterializeBatch.h"
+#include "DirtyRectList.h"
 #include "LiquifyPixelSampling.h"
 #include "kis_liquify_transform_worker.h"
 #include <QtConcurrent/QtConcurrentMap>
@@ -35,9 +37,13 @@ void ReverieCore::cropCanvas(int x, int y, int w, int h)
     m_docHeight = image->height();
     m_renderBufW = -1;
     m_renderBufH = -1;
-    m_dirtyRect = QRect(0, 0, m_docWidth, m_docHeight);
+    setDirtyFullFrame();
     m_bitmapInited = false;
     m_lastDirty = QRect();
+    if (m_undoStore) {
+        m_undoStore->purgeRedoState();
+    }
+    m_redoCount = 0;
     recompositeProjection();
     markDirty();
 }
@@ -66,9 +72,13 @@ void ReverieCore::scaleImage(int w, int h, int filterStrategyType)
     m_docHeight = image->height();
     m_renderBufW = -1;
     m_renderBufH = -1;
-    m_dirtyRect = QRect(0, 0, m_docWidth, m_docHeight);
+    setDirtyFullFrame();
     m_bitmapInited = false;
     m_lastDirty = QRect();
+    if (m_undoStore) {
+        m_undoStore->purgeRedoState();
+    }
+    m_redoCount = 0;
     recompositeProjection();
     markDirty();
 }
@@ -734,6 +744,16 @@ bool ReverieCore::liquifyDrainMaterialize(bool force)
     if (!force && budget <= 0) return false;
     const qint64 t0 = QDateTime::currentMSecsSinceEpoch();
     QRect changed;
+    reverie::DirtyRectList changedRegions;
+    // Keep all non-paint layer semantics on the existing bounding-region path.
+    bool splitComposite = !m_liquifyGraphProjection;
+    const auto &layers = m_layers; // Const iteration avoids detaching Qt shared storage.
+    for (const LayerEntry &entry : layers) {
+        if (!dynamic_cast<KisPaintLayer *>(entry.node)) {
+            splitComposite = false;
+            break;
+        }
+    }
     while (!m_liquifyMatQueue.isEmpty()) {
         // Adjacent tiles on one row share a single warp/painter/composite operation.
         // Keep the interactive quantum bounded; pen-up can consume a full row.
@@ -750,16 +770,30 @@ bool ReverieCore::liquifyDrainMaterialize(bool force)
         // 32-row chunk: no renderer can observe this engine-thread batch midway.
         liquifyApplyLocked(band, false);
         changed = changed.isEmpty() ? band : changed.united(band);
+        if (splitComposite) {
+            reverie::appendOrCoalesce(changedRegions, {band.x(), band.y(), band.width(), band.height()});
+        }
         if (!force && QDateTime::currentMSecsSinceEpoch() - t0 >= budget) break;
     }
     if (!changed.isEmpty() && !m_soloedNode && m_document) {
         const qint64 compositeStart = QDateTime::currentMSecsSinceEpoch();
-        liquifyRecomposeProjection(changed);
+        qint64 compositeArea = 0;
+        if (splitComposite) {
+            // At most eight regions, after all writes in this engine-thread batch.
+            for (int i = 0; i < changedRegions.count; ++i) {
+                const reverie::DirtyRect &r = changedRegions.rects[i];
+                liquifyRecomposeProjection(QRect(r.x, r.y, r.w, r.h));
+                compositeArea += reverie::dirtyRectArea(r);
+            }
+        } else {
+            liquifyRecomposeProjection(changed);
+            compositeArea = qint64(changed.width()) * changed.height();
+        }
         const qint64 compositeMs = QDateTime::currentMSecsSinceEpoch() - compositeStart;
         const qint64 totalMs = QDateTime::currentMSecsSinceEpoch() - t0;
         s_liquifyStats[LqComposite].store(compositeMs, std::memory_order_relaxed);
         s_liquifyStats[LqTotal].store(totalMs, std::memory_order_relaxed);
-        s_liquifyStats[LqAreaPx].store(qint64(changed.width()) * changed.height(), std::memory_order_relaxed);
+        s_liquifyStats[LqAreaPx].store(compositeArea, std::memory_order_relaxed);
         m_liquifyLastApplyMs = QDateTime::currentMSecsSinceEpoch();
         m_liquifyApplyIntervalMs = qBound<qint64>(LIQUIFY_APPLY_MIN_INTERVAL_MS, totalMs * 2, 64);
     }
@@ -1367,9 +1401,10 @@ void ReverieCore::liquifyPreviewBuildLocked()
     // 预览区必须进入脏区: renderToBuffer 的增量路径只重读脏区, 不标脏就永远叠不上去。
     // (1:1 路径的整帧分支与缓冲重置分支本来就全量重读, 这里只是把增量分支补齐。)
     if (m_document) {
-        m_dirtyRect = m_dirtyRect.isNull()
-                ? b.intersected(QRect(0, 0, m_document->width(), m_document->height()))
-                : m_dirtyRect.united(b.intersected(QRect(0, 0, m_document->width(), m_document->height())));
+        const QRect previewDirty = b.intersected(QRect(0, 0, m_document->width(), m_document->height()));
+        m_dirtyRect = m_dirtyRect.isNull() ? previewDirty : m_dirtyRect.united(previewDirty);
+        // 离散列表也要跟上, 否则逐块的增量路径读不到这块预览区
+        addDirtyRegion(previewDirty);
     }
     ++m_liquifyPreviewSeq;
 }
@@ -1539,32 +1574,45 @@ void ReverieCore::invalidateLiquifyPreviewBase()
 // 手感 —— 抬笔后仍由 Krita 精确重算并覆盖, 因此近似是可接受的。
 void ReverieCore::blendLiquifyPreview(quint8 *buffer, int w, int h, const QRect &written)
 {
+    if (w <= 0 || h <= 0) return;
+    // 整图/整视口缓冲: 原点就是文档原点, 缩放按 w/docW (1:1 路径下为 1)。
+    blendLiquifyPreviewScaled(buffer, w, h, 0, 0,
+                              qreal(w) / qreal(qMax(1, m_docWidth)),
+                              qreal(h) / qreal(qMax(1, m_docHeight)),
+                              written);
+}
+
+// 同上的通用形式: 缓冲可以是整幅画布, 也可以是显示网格里的一块瓦片。
+// [originX, originY] 是缓冲左上角对应的文档坐标, [sx, sy] 是文档 -> 缓冲的缩放
+// (瓦片走 1:1 显示路径, 两者都是 1)。written 是缓冲坐标。
+void ReverieCore::blendLiquifyPreviewScaled(quint8 *buffer, int w, int h, int originX, int originY,
+                                            qreal sx, qreal sy, const QRect &written)
+{
     if (!buffer || w <= 0 || h <= 0 || m_liquifyPreviewOut.isEmpty()) return;
     const int pw = m_liquifyPreviewW;
     const int ph = m_liquifyPreviewH;
     const QRect b = m_liquifyWorkerBounds;
     if (pw <= 0 || ph <= 0 || b.isEmpty()) return;
 
-    const qreal sx = qreal(w) / qreal(qMax(1, m_docWidth));
-    const qreal sy = qreal(h) / qreal(qMax(1, m_docHeight));
-    // 两端都走 round(edge*scale), 与缩放路径的 mapX/mapY 同一规则, 避免相邻帧漂移 1px
-    const int bx0 = qBound(0, qRound(b.left() * sx), w);
-    const int by0 = qBound(0, qRound(b.top() * sy), h);
-    const int bx1 = qBound(0, qRound((b.left() + b.width()) * sx), w);
-    const int by1 = qBound(0, qRound((b.top() + b.height()) * sy), h);
-    const QRect mapRect(bx0, by0, bx1 - bx0, by1 - by0);
+    const qreal mx0 = (b.left() - originX) * sx;
+    const qreal my0 = (b.top() - originY) * sy;
+    const qreal spanX = qMax<qreal>(1.0, qreal(b.width()) * sx);
+    const qreal spanY = qMax<qreal>(1.0, qreal(b.height()) * sy);
+    const QRect mapRect(qRound(mx0), qRound(my0),
+                        qRound((b.left() + b.width() - originX) * sx) - qRound(mx0),
+                        qRound((b.top() + b.height() - originY) * sy) - qRound(my0));
     const QRect area = mapRect.intersected(written).intersected(QRect(0, 0, w, h));
     if (area.isEmpty()) return;
 
-    const qreal invSpanX = qreal(pw) / qMax<qreal>(1.0, qreal(mapRect.width()));
-    const qreal invSpanY = qreal(ph) / qMax<qreal>(1.0, qreal(mapRect.height()));
+    const qreal invSpanX = qreal(pw) / spanX;
+    const qreal invSpanY = qreal(ph) / spanY;
     const quint8 *prev = m_liquifyPreviewOut.constData();
     for (int y = area.top(); y <= area.bottom(); ++y) {
-        const int py = qBound(0, int((y - mapRect.top()) * invSpanY), ph - 1);
+        const int py = qBound(0, int((y - my0) * invSpanY), ph - 1);
         const quint8 *prow = prev + size_t(py) * size_t(pw) * 4;
         quint8 *drow = buffer + size_t(y) * size_t(w) * 4 + size_t(area.left()) * 4;
         for (int x = area.left(); x <= area.right(); ++x, drow += 4) {
-            const int px = qBound(0, int((x - mapRect.left()) * invSpanX), pw - 1);
+            const int px = qBound(0, int((x - mx0) * invSpanX), pw - 1);
             const quint8 *s = prow + size_t(px) * 4;
             const int sa = s[3];
             if (sa == 0) continue; // 预览完全透明 = 无内容, 保留缓冲原像素

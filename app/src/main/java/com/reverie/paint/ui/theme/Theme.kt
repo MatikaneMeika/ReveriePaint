@@ -64,21 +64,21 @@ val MorandiDarkColors =
         error = Color(0xFFD46A6A),
     )
 
-/** Default iOS Light palette - clean light gray background with pure white cards and Morandi misty blue accent. */
+/** Default iOS Light palette - soft Morandi warm studio workspace with balanced contrast. */
 val MorandiLightColors =
     AppColors(
         bg = Color(0xFFF2F2F7), // iOS Grouped Background: refined light gray
-        panel = Color(0xFFFFFFFF), // Pure white foreground cards/panels
-        panelHi = Color(0xFFE5E5EA), // iOS System Gray 5: Inner card surfaces/pills
+        panel = Color(0xFFF7F7F9), // Soft warm off-white panels (eliminates harsh pure white glare)
+        panelHi = Color(0xFFEAEAEE), // Refined raised surface gray
         accent = Color(0xFF5A6E8A), // Morandi signature misty blue
-        accentHi = Color(0xFF4F6179),
+        accentHi = Color(0xFF4A5C75),
         onAccent = Color(0xFFFFFFFF),
-        text = Color(0xFF000000), // Crisp deep black text
-        subText = Color(0xFF8E8E93), // iOS Secondary Label gray
+        text = Color(0xFF242426), // Deep warm graphite text (replaces harsh #000000)
+        subText = Color(0xFF8A8A8E), // Morandi balanced secondary label gray
         canvasBg = Color(0xFFE5E5EA), // Clean neutral workspace backdrop
         border = Color.Transparent, // Borderless studio aesthetic
-        icon = Color(0xFF3C3C43),
-        scrim = Color(0x52000000),
+        icon = Color(0xFF636366), // Balanced medium graphite icon (eliminates excessive contrast)
+        scrim = Color(0x3D000000),
         gridLine = Color(0x1F000000),
         canvasShadow = Color(0x1F000000),
         error = Color(0xFFD04444),
@@ -96,9 +96,46 @@ fun blendColors(base: Color, tint: Color, tintWeight: Float): Color {
     return Color(red = r, green = g, blue = b, alpha = base.alpha)
 }
 
-/** Build theme colors where changing accent only affects the primary accent, keeping backgrounds/panels pure neutral */
-fun buildThemeColors(isDark: Boolean, accent: Color): AppColors {
-    val fallbackBase = if (isDark) MorandiDarkColors else MorandiLightColors
+/** Build theme colors where changing accent only affects the primary accent, keeping backgrounds/panels pure neutral with contrast levels */
+fun buildThemeColors(isDark: Boolean, accent: Color, contrast: String = "STANDARD"): AppColors {
+    val fallbackBase = if (isDark) {
+        when (contrast) {
+            "SOFT" -> MorandiDarkColors.copy(
+                panel = Color(0xFF222226),
+                panelHi = Color(0xFF2D2D32),
+                text = Color(0xFFE2E2E6),
+                subText = Color(0xFF828286),
+                icon = Color(0xFF88888D),
+            )
+            "HIGH" -> MorandiDarkColors.copy(
+                panel = Color(0xFF161618),
+                panelHi = Color(0xFF242428),
+                text = Color(0xFFFFFFFF),
+                subText = Color(0xFF9E9EA4),
+                icon = Color(0xFFAFAFB5),
+            )
+            else -> MorandiDarkColors
+        }
+    } else {
+        when (contrast) {
+            "SOFT" -> MorandiLightColors.copy(
+                panel = Color(0xFFF4F4F6),
+                panelHi = Color(0xFFE5E5E9),
+                text = Color(0xFF333336),
+                subText = Color(0xFF949498),
+                icon = Color(0xFF757579),
+            )
+            "HIGH" -> MorandiLightColors.copy(
+                panel = Color(0xFFFFFFFF),
+                panelHi = Color(0xFFE2E2E7),
+                text = Color(0xFF111113),
+                subText = Color(0xFF707075),
+                icon = Color(0xFF48484C),
+            )
+            else -> MorandiLightColors
+        }
+    }
+
     val accentHi = if (isDark) {
         blendColors(accent, Color.White, 0.18f)
     } else {
@@ -114,17 +151,18 @@ fun buildThemeColors(isDark: Boolean, accent: Color): AppColors {
 fun getMonetColors(
     context: Context,
     isDark: Boolean = true,
-    fallbackAccent: Color = Color(0xFF5A6E8A)
+    fallbackAccent: Color = Color(0xFF5A6E8A),
+    contrast: String = "STANDARD",
 ): AppColors {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
         return try {
             val scheme = if (isDark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-            buildThemeColors(isDark = isDark, accent = scheme.primary)
+            buildThemeColors(isDark = isDark, accent = scheme.primary, contrast = contrast)
         } catch (_: Throwable) {
-            buildThemeColors(isDark = isDark, accent = fallbackAccent)
+            buildThemeColors(isDark = isDark, accent = fallbackAccent, contrast = contrast)
         }
     }
-    return buildThemeColors(isDark = isDark, accent = fallbackAccent)
+    return buildThemeColors(isDark = isDark, accent = fallbackAccent, contrast = contrast)
 }
 
 /**

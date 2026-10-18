@@ -84,6 +84,7 @@ internal fun StylusSettingsSubPage(
         stringResource(R.string.stylus_cursor_shape_none),
         stringResource(R.string.stylus_cursor_shape_system),
         stringResource(R.string.stylus_cursor_shape_circle_crosshair),
+        stringResource(R.string.stylus_cursor_shape_brush_outline),
     )
 
     Column(
@@ -107,11 +108,11 @@ internal fun StylusSettingsSubPage(
                 onBack = onBack,
             )
 
-            // 1. 触控与光标设置
-            SettingCategoryTitle(stringResource(R.string.stylus_touch_and_cursor))
+            // 1. 触控与笔画预测
+            SettingCategoryTitle(stringResource(R.string.stylus_category_touch_prediction))
             SettingGroup {
                 val isPredictionOn = vm.stylusPredictionMasterEnabled
-                val touchTotal = if (isPredictionOn) 8 else 6
+                val touchTotal = if (isPredictionOn) 5 else 3
                 SettingSwitchGroupItem(
                     icon = Icons.Rounded.Edit,
                     title = stringResource(R.string.settings_pen_mode),
@@ -152,14 +153,18 @@ internal fun StylusSettingsSubPage(
                         onClick = { vm.updateStylusPredictionAlgorithm("SOFTWARE") },
                     )
                 }
-                val cursorOffset = if (isPredictionOn) 5 else 3
+            }
+
+            // 2. 光标与准星指示
+            SettingCategoryTitle(stringResource(R.string.stylus_category_cursor))
+            SettingGroup {
                 SettingDropdownGroupItem(
                     icon = Icons.Rounded.Brush,
                     title = stringResource(R.string.stylus_brush_cursor),
                     summary = stringResource(R.string.stylus_brush_cursor_desc),
                     currentText = cursorModeOptions.getOrElse(vm.brushCursorMode) { cursorModeOptions[0] },
                     options = cursorModeOptions,
-                    shape = settingGroupShape(cursorOffset, touchTotal),
+                    shape = settingGroupShape(0, 3),
                     onSelect = { vm.updateBrushCursorMode(it) },
                 )
                 SettingDropdownGroupItem(
@@ -168,7 +173,7 @@ internal fun StylusSettingsSubPage(
                     summary = stringResource(R.string.stylus_eraser_cursor_desc),
                     currentText = cursorModeOptions.getOrElse(vm.eraserCursorMode) { cursorModeOptions.last() },
                     options = cursorModeOptions,
-                    shape = settingGroupShape(cursorOffset + 1, touchTotal),
+                    shape = settingGroupShape(1, 3),
                     onSelect = { vm.updateEraserCursorMode(it) },
                 )
                 SettingDropdownGroupItem(
@@ -177,7 +182,7 @@ internal fun StylusSettingsSubPage(
                     summary = stringResource(R.string.stylus_cursor_style_desc),
                     currentText = cursorStyleOptions.getOrElse(vm.cursorStyleMode) { cursorStyleOptions[0] },
                     options = cursorStyleOptions,
-                    shape = settingGroupShape(cursorOffset + 2, touchTotal),
+                    shape = settingGroupShape(2, 3),
                     onSelect = { vm.updateCursorStyleMode(it) },
                 )
             }

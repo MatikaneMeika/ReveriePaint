@@ -79,6 +79,7 @@ internal fun ThemeSettingsSubPage(
     var customColorAnchorBounds by remember { mutableStateOf<Rect?>(null) }
     var showCustomCanvasBgDialog by remember { mutableStateOf(false) }
     var customCanvasBgAnchorBounds by remember { mutableStateOf<Rect?>(null) }
+    var showFloatingLayoutDialog by remember { mutableStateOf(false) }
     val presetSwatches = listOf(
         "#5A6E8A", "#5A8A86", "#5A8A6A", "#768A5A", "#8A7A5A",
         "#8A665A", "#8A5A66", "#825A8A", "#625A8A"
@@ -120,8 +121,8 @@ internal fun ThemeSettingsSubPage(
                 onBack = onBack,
             )
 
-            // Section 1: 色彩与主题模式
-            SettingCategoryTitle(stringResource(R.string.theme_category_color_mode))
+            // Section 1: 色彩与主题
+            SettingCategoryTitle(stringResource(R.string.theme_category_color_appearance))
             SettingGroup {
                 SettingSegmentGroupItem(
                     icon = Icons.Rounded.Brightness4,
@@ -133,8 +134,22 @@ internal fun ThemeSettingsSubPage(
                         "SYSTEM" to stringResource(R.string.theme_mode_system),
                     ),
                     selected = vm.themeMode,
-                    shape = settingGroupShape(0, 2),
+                    shape = settingGroupShape(0, 3),
                     onSelect = { vm.updateThemeMode(it) },
+                )
+
+                SettingSegmentGroupItem(
+                    icon = R.drawable.ic_contrast,
+                    title = stringResource(R.string.theme_contrast_title),
+                    summary = stringResource(R.string.theme_contrast_summary),
+                    options = listOf(
+                        "SOFT" to stringResource(R.string.theme_contrast_soft),
+                        "STANDARD" to stringResource(R.string.theme_contrast_standard),
+                        "HIGH" to stringResource(R.string.theme_contrast_high),
+                    ),
+                    selected = vm.themeContrast,
+                    shape = settingGroupShape(1, 3),
+                    onSelect = { vm.updateThemeContrast(it) },
                 )
 
                 SettingSwitchGroupItem(
@@ -147,13 +162,14 @@ internal fun ThemeSettingsSubPage(
                     },
                     checked = vm.monetEnabled,
                     enabled = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S,
-                    shape = settingGroupShape(1, 2),
+                    shape = settingGroupShape(2, 3),
                     onCheckedChange = { vm.updateMonetEnabled(it) },
                 )
             }
 
-            // Section 2: 主色调
-            SettingCategoryTitle(stringResource(R.string.theme_category_accent))
+            Spacer(Modifier.height(8.dp))
+
+            // 主色调强调色
             SettingGroup {
                 SettingCardBox(shape = settingGroupShape(0, 1)) {
                     Column(modifier = Modifier.fillMaxWidth()) {
@@ -255,8 +271,9 @@ internal fun ThemeSettingsSubPage(
                 }
             }
 
-            // Section 3: 画布工作区背景
-            SettingCategoryTitle(stringResource(R.string.theme_category_canvas_bg))
+            Spacer(Modifier.height(8.dp))
+
+            // 画布工作区背景底色
             SettingGroup {
                 SettingCardBox(shape = settingGroupShape(0, 1)) {
                     Column(modifier = Modifier.fillMaxWidth()) {
@@ -328,11 +345,11 @@ internal fun ThemeSettingsSubPage(
                                         modifier = Modifier
                                             .size(38.dp)
                                             .clip(CircleShape)
-                                        .background(swatchColor)
-                                        .then(
-                                            if (isSelected) Modifier.border(2.5.dp, colors.accent, CircleShape) else Modifier
-                                        )
-                                        .clickable { vm.updateCanvasBgColor(hex) },
+                                            .background(swatchColor)
+                                            .then(
+                                                if (isSelected) Modifier.border(2.5.dp, colors.accent, CircleShape) else Modifier
+                                            )
+                                            .clickable { vm.updateCanvasBgColor(hex) },
                                         contentAlignment = Alignment.Center,
                                     ) {
                                         if (isSelected) {
@@ -382,101 +399,7 @@ internal fun ThemeSettingsSubPage(
                 }
             }
 
-            // Section 4: 界面不透明度
-            SettingCategoryTitle(stringResource(R.string.theme_category_opacity))
-            SettingGroup {
-                SettingSliderGroupItem(
-                    icon = Icons.Rounded.Opacity,
-                    title = stringResource(R.string.theme_opacity_main_panel),
-                    summary = stringResource(R.string.theme_opacity_main_panel_desc),
-                    valueText = "${(vm.uiOpacity * 100).toInt()}%",
-                    sliderFraction = ((vm.uiOpacity - 0.2f) / 0.8f).coerceIn(0f, 1f),
-                    shape = settingGroupShape(0, 2),
-                    onValueChange = { vm.updateUiOpacity((0.2f + it * 0.8f).coerceIn(0.2f, 1f)) },
-                )
-
-                SettingSliderGroupItem(
-                    icon = Icons.Rounded.Layers,
-                    title = stringResource(R.string.theme_opacity_floating_panel),
-                    summary = stringResource(R.string.theme_opacity_floating_panel_desc),
-                    valueText = "${(vm.popupPanelOpacity * 100).toInt()}%",
-                    sliderFraction = ((vm.popupPanelOpacity - 0.2f) / 0.8f).coerceIn(0f, 1f),
-                    shape = settingGroupShape(1, 2),
-                    onValueChange = { vm.updatePopupPanelOpacity((0.2f + it * 0.8f).coerceIn(0.2f, 1f)) },
-                )
-            }
-
-            // Section 5: 界面尺寸
-            SettingCategoryTitle(stringResource(R.string.theme_category_ui_scale))
-            SettingGroup {
-                SettingSliderGroupItem(
-                    icon = Icons.Rounded.AspectRatio,
-                    title = stringResource(R.string.theme_ui_scale_title),
-                    summary = stringResource(R.string.theme_ui_scale_desc),
-                    valueText = "${(vm.paintingUiScale * 100).toInt()}%",
-                    sliderFraction = ((vm.paintingUiScale - 0.75f) / (1.35f - 0.75f)).coerceIn(0f, 1f),
-                    shape = settingGroupShape(0, 4),
-                    onValueChange = { fraction ->
-                        val newScale = 0.75f + fraction * (1.35f - 0.75f)
-                        vm.updatePaintingUiScale(newScale)
-                    },
-                )
-
-                SettingSliderGroupItem(
-                    icon = Icons.Rounded.Height,
-                    title = stringResource(R.string.theme_quick_slider_height_title),
-                    summary = stringResource(R.string.theme_quick_slider_height_desc),
-                    valueText = "${vm.quickSliderHeightDp} dp",
-                    sliderFraction = ((vm.quickSliderHeightDp - 100f) / (260f - 100f)).coerceIn(0f, 1f),
-                    shape = settingGroupShape(1, 4),
-                    onValueChange = { fraction ->
-                        val newHeight = (100f + fraction * 160f).roundToInt()
-                        vm.updateQuickSliderHeight(newHeight)
-                    },
-                )
-
-                SettingSegmentGroupItem(
-                    icon = R.drawable.ic_layers,
-                    title = stringResource(R.string.settings_layer_row_height),
-                    summary = "${vm.layerRowHeightDp} dp",
-                    options = listOf(
-                        44 to stringResource(R.string.settings_layer_height_compact),
-                        52 to stringResource(R.string.settings_layer_height_standard),
-                        64 to stringResource(R.string.settings_layer_height_spacious),
-                    ),
-                    selected = vm.layerRowHeightDp,
-                    shape = settingGroupShape(2, 4),
-                    onSelect = { vm.updateLayerRowHeight(it) },
-                )
-
-                SettingSwitchGroupItem(
-                    icon = Icons.AutoMirrored.Rounded.ViewSidebar,
-                    title = stringResource(R.string.theme_left_hand_mode_title),
-                    summary = stringResource(R.string.theme_left_hand_mode_desc),
-                    checked = vm.leftHandMode,
-                    shape = settingGroupShape(3, 4),
-                    onCheckedChange = { vm.updateLeftHandMode(it) },
-                )
-            }
-
-            // Section 6: 选区显示
-            SettingCategoryTitle(stringResource(R.string.theme_category_selection_mask))
-            SettingGroup {
-                SettingSliderGroupItem(
-                    icon = Icons.Rounded.Opacity,
-                    title = stringResource(R.string.theme_selection_mask_opacity_title),
-                    summary = stringResource(R.string.theme_selection_mask_opacity_desc),
-                    valueText = "${(vm.selectionMaskOpacity * 100).roundToInt()}%",
-                    sliderFraction = ((vm.selectionMaskOpacity - 0.10f) / (0.90f - 0.10f)).coerceIn(0f, 1f),
-                    shape = settingGroupShape(0, 1),
-                    onValueChange = { fraction ->
-                        val newOpacity = (0.10f + fraction * 0.80f).coerceIn(0.10f, 0.90f)
-                        vm.updateSelectionMaskOpacity(newOpacity)
-                    },
-                )
-            }
-
-            // Section 7: 显示与效果
+            // Section 2: 视觉与效果
             SettingCategoryTitle(stringResource(R.string.theme_category_effects))
             SettingGroup {
                 val blurSupported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
@@ -515,6 +438,158 @@ internal fun ThemeSettingsSubPage(
                 )
             }
 
+            // Section 3: 面板与尺寸
+            SettingCategoryTitle(stringResource(R.string.theme_category_panels_scale))
+            SettingGroup {
+                SettingSliderGroupItem(
+                    icon = Icons.Rounded.Opacity,
+                    title = stringResource(R.string.theme_opacity_main_panel),
+                    summary = stringResource(R.string.theme_opacity_main_panel_desc),
+                    valueText = "${(vm.uiOpacity * 100).toInt()}%",
+                    sliderFraction = ((vm.uiOpacity - 0.2f) / 0.8f).coerceIn(0f, 1f),
+                    shape = settingGroupShape(0, 4),
+                    onValueChange = { vm.updateUiOpacity((0.2f + it * 0.8f).coerceIn(0.2f, 1f)) },
+                )
+
+                SettingSliderGroupItem(
+                    icon = Icons.Rounded.Layers,
+                    title = stringResource(R.string.theme_opacity_floating_panel),
+                    summary = stringResource(R.string.theme_opacity_floating_panel_desc),
+                    valueText = "${(vm.popupPanelOpacity * 100).toInt()}%",
+                    sliderFraction = ((vm.popupPanelOpacity - 0.2f) / 0.8f).coerceIn(0f, 1f),
+                    shape = settingGroupShape(1, 4),
+                    onValueChange = { vm.updatePopupPanelOpacity((0.2f + it * 0.8f).coerceIn(0.2f, 1f)) },
+                )
+
+                SettingSliderGroupItem(
+                    icon = Icons.Rounded.AspectRatio,
+                    title = stringResource(R.string.theme_ui_scale_title),
+                    summary = stringResource(R.string.theme_ui_scale_desc),
+                    valueText = "${(vm.paintingUiScale * 100).toInt()}%",
+                    sliderFraction = ((vm.paintingUiScale - 0.75f) / (1.35f - 0.75f)).coerceIn(0f, 1f),
+                    shape = settingGroupShape(2, 4),
+                    onValueChange = { fraction ->
+                        val newScale = 0.75f + fraction * (1.35f - 0.75f)
+                        vm.updatePaintingUiScale(newScale)
+                    },
+                )
+
+                SettingSliderGroupItem(
+                    icon = Icons.Rounded.Height,
+                    title = stringResource(R.string.theme_quick_slider_height_title),
+                    summary = stringResource(R.string.theme_quick_slider_height_desc),
+                    valueText = "${vm.quickSliderHeightDp} dp",
+                    sliderFraction = ((vm.quickSliderHeightDp - 100f) / (260f - 100f)).coerceIn(0f, 1f),
+                    shape = settingGroupShape(3, 4),
+                    onValueChange = { fraction ->
+                        val newHeight = (100f + fraction * 160f).roundToInt()
+                        vm.updateQuickSliderHeight(newHeight)
+                    },
+                )
+            }
+
+            // Section 4: 工作区与布局
+            val isTabletDevice = com.reverie.paint.core.DeviceUtils.isTablet(androidx.compose.ui.platform.LocalContext.current)
+            SettingCategoryTitle(stringResource(R.string.theme_category_workspace_layout))
+            SettingGroup {
+                val layoutCount = if (isTabletDevice && vm.floatingUiConfig.enabled) 5 else if (isTabletDevice) 2 else 1
+                // 1. 默认贴边布局单选
+                SettingRadioGroupItem(
+                    title = stringResource(R.string.theme_layout_docked),
+                    summary = stringResource(R.string.theme_layout_docked_desc),
+                    selected = !vm.floatingUiConfig.enabled,
+                    shape = settingGroupShape(0, layoutCount),
+                    indentStart = 16.dp,
+                    onClick = { vm.updateFloatingUiEnabled(false) },
+                )
+
+                // 2. 自由悬浮模式 (平板专属)
+                if (isTabletDevice) {
+                    SettingRadioGroupItem(
+                        title = stringResource(R.string.theme_layout_floating),
+                        summary = stringResource(R.string.theme_layout_floating_desc),
+                        selected = vm.floatingUiConfig.enabled,
+                        shape = settingGroupShape(1, layoutCount),
+                        indentStart = 16.dp,
+                        onClick = { vm.updateFloatingUiEnabled(true) },
+                    )
+
+                    if (vm.floatingUiConfig.enabled) {
+                        // 专属可视化排布调整入口
+                        SettingNavGroupItem(
+                            icon = Icons.AutoMirrored.Rounded.ViewSidebar,
+                            title = stringResource(R.string.panel_dock_dialog_title),
+                            summary = stringResource(R.string.panel_dock_dialog_tip),
+                            shape = settingGroupShape(2, layoutCount),
+                            onClick = { showFloatingLayoutDialog = true },
+                        )
+
+                        // 独立大小调整
+                        SettingSliderGroupItem(
+                            icon = Icons.Rounded.AspectRatio,
+                            title = stringResource(R.string.panel_dock_scale_title),
+                            summary = stringResource(R.string.panel_dock_scale_desc),
+                            valueText = "${(vm.floatingUiConfig.scale * 100).roundToInt()}%",
+                            sliderFraction = ((vm.floatingUiConfig.scale - 0.70f) / (1.40f - 0.70f)).coerceIn(0f, 1f),
+                            shape = settingGroupShape(3, layoutCount),
+                            onValueChange = { fraction ->
+                                val newScale = 0.70f + fraction * 0.70f
+                                vm.updateFloatingUiScale(newScale)
+                            },
+                        )
+
+                        // 一键恢复默认停靠
+                        SettingNavGroupItem(
+                            icon = R.drawable.ic_undo,
+                            title = stringResource(R.string.panel_dock_reset),
+                            shape = settingGroupShape(4, layoutCount),
+                            onClick = { vm.resetFloatingUiEdges() },
+                        )
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(8.dp))
+
+            // 图层、手势偏好与选区遮罩
+            SettingGroup {
+                SettingSegmentGroupItem(
+                    icon = R.drawable.ic_layers,
+                    title = stringResource(R.string.settings_layer_row_height),
+                    summary = "${vm.layerRowHeightDp} dp",
+                    options = listOf(
+                        44 to stringResource(R.string.settings_layer_height_compact),
+                        52 to stringResource(R.string.settings_layer_height_standard),
+                        64 to stringResource(R.string.settings_layer_height_spacious),
+                    ),
+                    selected = vm.layerRowHeightDp,
+                    shape = settingGroupShape(0, 3),
+                    onSelect = { vm.updateLayerRowHeight(it) },
+                )
+
+                SettingSwitchGroupItem(
+                    icon = Icons.AutoMirrored.Rounded.ViewSidebar,
+                    title = stringResource(R.string.theme_left_hand_mode_title),
+                    summary = stringResource(R.string.theme_left_hand_mode_desc),
+                    checked = vm.leftHandMode,
+                    shape = settingGroupShape(1, 3),
+                    onCheckedChange = { vm.updateLeftHandMode(it) },
+                )
+
+                SettingSliderGroupItem(
+                    icon = Icons.Rounded.Opacity,
+                    title = stringResource(R.string.theme_selection_mask_opacity_title),
+                    summary = stringResource(R.string.theme_selection_mask_opacity_desc),
+                    valueText = "${(vm.selectionMaskOpacity * 100).roundToInt()}%",
+                    sliderFraction = ((vm.selectionMaskOpacity - 0.10f) / (0.90f - 0.10f)).coerceIn(0f, 1f),
+                    shape = settingGroupShape(2, 3),
+                    onValueChange = { fraction ->
+                        val newOpacity = (0.10f + fraction * 0.80f).coerceIn(0.10f, 0.90f)
+                        vm.updateSelectionMaskOpacity(newOpacity)
+                    },
+                )
+            }
+
             Spacer(Modifier.height(80.dp))
         }
     }
@@ -542,6 +617,13 @@ internal fun ThemeSettingsSubPage(
                 showCustomCanvasBgDialog = false
             },
             onDismiss = { showCustomCanvasBgDialog = false },
+        )
+    }
+
+    if (showFloatingLayoutDialog) {
+        com.reverie.paint.ui.painting.FloatingLayoutConfigDialog(
+            vm = vm,
+            onDismiss = { showFloatingLayoutDialog = false },
         )
     }
 }

@@ -53,6 +53,69 @@ static void reverieQtMessageHandler(QtMsgType type, const QMessageLogContext &co
                         msg.toUtf8().constData());
 }
 
+static void querySystemMemoryMb(long &totalMb, long &availMb)
+{
+    totalMb = 0;
+    availMb = 0;
+    FILE *f = fopen("/proc/meminfo", "r");
+    if (f) {
+        char line[256];
+        long memTotalKb = 0;
+        long memAvailKb = 0;
+        long memFreeKb = 0;
+        long buffersKb = 0;
+        long cachedKb = 0;
+        while (fgets(line, sizeof(line), f)) {
+            if (sscanf(line, "MemTotal: %ld kB", &memTotalKb) == 1) continue;
+            if (sscanf(line, "MemAvailable: %ld kB", &memAvailKb) == 1) continue;
+            if (sscanf(line, "MemFree: %ld kB", &memFreeKb) == 1) continue;
+            if (sscanf(line, "Buffers: %ld kB", &buffersKb) == 1) continue;
+            if (sscanf(line, "Cached: %ld kB", &cachedKb) == 1) continue;
+        }
+        fclose(f);
+        if (memTotalKb > 0) totalMb = memTotalKb / 1024;
+        if (memAvailKb > 0) {
+            availMb = memAvailKb / 1024;
+        } else if (memFreeKb > 0) {
+            availMb = (memFreeKb + buffersKb + cachedKb) / 1024;
+        }
+    }
+    if (totalMb <= 0) {
+        long pages = sysconf(_SC_PHYS_PAGES);
+        long pageSize = sysconf(_SC_PAGE_SIZE);
+        if (pages > 0 && pageSize > 0) {
+            totalMb = (pages * pageSize) / (1024 * 1024);
+        }
+    }
+    if (availMb <= 0) {
+        availMb = totalMb > 0 ? totalMb / 3 : 1024;
+    }
+}
+
+static void tuneKritaTileMemory(KisImageConfig &config)
+{
+    long totalMb = 0;
+    long availMb = 0;
+    querySystemMemoryMb(totalMb, availMb);
+
+    // 目标硬上限: 绝对值锁死在 [384MB, 1400MB] 之间，且绝不超过当前可用内存的 50%
+    const double targetHardMb = qBound(384.0, double(availMb) * 0.50, 1400.0);
+    const double targetSoftMb = qBound(256.0, targetHardMb * 0.70, 1000.0);
+
+    const double hardPercent = (totalMb > 0) ? qBound(5.0, (targetHardMb / double(totalMb)) * 100.0, 45.0) : 25.0;
+    const double softPercent = (totalMb > 0) ? qBound(3.0, (targetSoftMb / double(totalMb)) * 100.0, hardPercent * 0.75) : 15.0;
+    const double poolPercent = qBound(2.0, softPercent * 0.5, 10.0);
+
+    config.setMemorySoftLimitPercent(softPercent);
+    config.setMemoryHardLimitPercent(hardPercent);
+    config.setMemoryPoolLimitPercent(poolPercent);
+    config.setMaxSwapSize(8192);
+
+    __android_log_print(ANDROID_LOG_INFO, "RP-JNI",
+        "Krita tile memory auto-tuned: total=%ldMB, avail=%ldMB, soft=%.1fMB (%.1f%%), hard=%.1fMB (%.1f%%), pool=%.1f%%",
+        totalMb, availMb, targetSoftMb, softPercent, targetHardMb, hardPercent, poolPercent);
+}
+
 static void ensureQtApp()
 {
     if (!g_app) {
@@ -63,9 +126,7 @@ static void ensureQtApp()
 
         try {
             KisImageConfig config(false);
-            config.setMemorySoftLimitPercent(50.0);
-            config.setMemoryHardLimitPercent(75.0);
-            config.setMaxSwapSize(8192);
+            tuneKritaTileMemory(config);
         } catch (...) {}
 
         // Krita's KisFilterRegistry, KisGeneratorRegistry, and KisResourceLoaderRegistry
@@ -148,7 +209,20 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *)
     // dlopen without RTLD_NOLOAD: if the dependency chain hasn't loaded
     // libQt6Core yet (unlikely, but possible with lazy binding), this loads
     // it so the dlsym below can find initJNI.
+#if defined(__arm__)
+    void *qtCore = dlopen("libQt6Core_armeabi-v7a.so", RTLD_NOW);
+#elif defined(__aarch64__)
     void *qtCore = dlopen("libQt6Core_arm64-v8a.so", RTLD_NOW);
+#elif defined(__i386__)
+    void *qtCore = dlopen("libQt6Core_x86.so", RTLD_NOW);
+#elif defined(__x86_64__)
+    void *qtCore = dlopen("libQt6Core_x86_64.so", RTLD_NOW);
+#else
+    void *qtCore = dlopen("libQt6Core.so", RTLD_NOW);
+#endif
+    if (!qtCore) {
+        qtCore = dlopen("libQt6Core.so", RTLD_NOW);
+    }
     if (!qtCore) {
         __android_log_print(ANDROID_LOG_ERROR, "RP-JNI", "dlopen Qt6Core failed: %s", dlerror());
     }
@@ -251,6 +325,86 @@ Java_com_reverie_paint_core_ReverieCoreBridge_renderToBuffer(JNIEnv *env, jobjec
         const QRect r = ok ? core()->lastWrittenRect() : QRect();
         jint vals[4] = {r.x(), r.y(), r.width(), r.height()};
         env->SetIntArrayRegion(outDirty, 0, 4, vals);
+    }
+    return ok ? JNI_TRUE : JNI_FALSE;
+}
+
+// 显示瓦片一帧最多带回 8 块脏区: 与引擎侧 DirtyRectList 容量一致。
+static constexpr int kMaxTileDirtyRects = 8;
+
+JNIEXPORT jint JNICALL
+Java_com_reverie_paint_core_ReverieCoreBridge_beginRenderTiles(JNIEnv *env, jobject, jintArray outRects)
+{
+    if (outRects == nullptr) {
+        return 0;
+    }
+    const jsize len = env->GetArrayLength(outRects);
+    const int cap = qMin<int>(len / 4, kMaxTileDirtyRects);
+    if (cap <= 0) {
+        return 0;
+    }
+    QRect rects[kMaxTileDirtyRects];
+    const int n = core()->beginTileFrame(rects, cap);
+    if (n > 0) {
+        jint vals[kMaxTileDirtyRects * 4];
+        for (int i = 0; i < n; ++i) {
+            vals[i * 4 + 0] = rects[i].x();
+            vals[i * 4 + 1] = rects[i].y();
+            vals[i * 4 + 2] = rects[i].width();
+            vals[i * 4 + 3] = rects[i].height();
+        }
+        env->SetIntArrayRegion(outRects, 0, n * 4, vals);
+    }
+    return n;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_reverie_paint_core_ReverieCoreBridge_renderTileToBuffer(JNIEnv *env, jobject,
+                                                                 jobject bitmap, jint docX, jint docY,
+                                                                 jintArray dirtyRects, jintArray outWritten)
+{
+    if (bitmap == nullptr) {
+        return JNI_FALSE;
+    }
+    AndroidBitmapInfo info;
+    if (AndroidBitmap_getInfo(env, bitmap, &info) != ANDROID_BITMAP_RESULT_SUCCESS) {
+        return JNI_FALSE;
+    }
+    // 引擎按紧密排列的 RGBA8888 (行步长 = width * 4) 写瓦片: 格式或步长不符就拒绝,
+    // 否则会按错误的行宽写穿位图内存。
+    if (info.width == 0 || info.height == 0 || info.format != ANDROID_BITMAP_FORMAT_RGBA_8888 ||
+        info.stride != info.width * 4) {
+        return JNI_FALSE;
+    }
+
+    QRect rects[kMaxTileDirtyRects];
+    int count = 0;
+    if (dirtyRects != nullptr) {
+        const jsize len = env->GetArrayLength(dirtyRects);
+        const int max = qMin<int>(len / 4, kMaxTileDirtyRects);
+        if (max > 0) {
+            jint vals[kMaxTileDirtyRects * 4];
+            env->GetIntArrayRegion(dirtyRects, 0, max * 4, vals);
+            for (int i = 0; i < max; ++i) {
+                const QRect r(vals[i * 4], vals[i * 4 + 1], vals[i * 4 + 2], vals[i * 4 + 3]);
+                if (!r.isEmpty()) {
+                    rects[count++] = r;
+                }
+            }
+        }
+    }
+
+    void *pixels = nullptr;
+    if (AndroidBitmap_lockPixels(env, bitmap, &pixels) != ANDROID_BITMAP_RESULT_SUCCESS) {
+        return JNI_FALSE;
+    }
+    QRect written;
+    const bool ok = core()->renderTileToBuffer(static_cast<quint8 *>(pixels), int(info.width),
+                                               int(info.height), docX, docY, rects, count, &written);
+    AndroidBitmap_unlockPixels(env, bitmap);
+    if (outWritten != nullptr && env->GetArrayLength(outWritten) >= 4) {
+        jint vals[4] = {written.x(), written.y(), written.width(), written.height()};
+        env->SetIntArrayRegion(outWritten, 0, 4, vals);
     }
     return ok ? JNI_TRUE : JNI_FALSE;
 }
@@ -372,9 +526,7 @@ Java_com_reverie_paint_core_ReverieCoreBridge_configureTileEngine(JNIEnv *env, j
             config.setSwapDir(QString::fromUtf8(swapDir));
             __android_log_print(ANDROID_LOG_INFO, "RP-JNI", "Krita swap location configured: %s", swapDir);
         }
-        config.setMemorySoftLimitPercent(50.0);
-        config.setMemoryHardLimitPercent(75.0);
-        config.setMaxSwapSize(8192);
+        tuneKritaTileMemory(config);
     } catch (...) {}
     if (swapDir) env->ReleaseStringUTFChars(jSwapDir, swapDir);
 }

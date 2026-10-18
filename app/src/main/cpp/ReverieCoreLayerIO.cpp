@@ -44,6 +44,10 @@ void writeCommonAttrs(QXmlStreamWriter &w, const ReverieCore::LayerEntry &e)
     w.writeAttribute("opacity", QString::number(node ? node->opacity() : 255));
     if (KisLayer *l = dynamic_cast<KisLayer *>(node)) {
         w.writeAttribute("compositeop", l->compositeOpId());
+        // 穿透混合模式 (仅组有语义): 不序列化则保存重开后退回隔离组
+        if (KisGroupLayer *g = dynamic_cast<KisGroupLayer *>(node)) {
+            w.writeAttribute("pass_through", g->passThroughMode() ? "1" : "0");
+        }
     }
     w.writeAttribute("locked", e.locked ? "1" : "0");
     w.writeAttribute("alpha_locked", e.alphaLocked ? "1" : "0");
@@ -65,6 +69,9 @@ void writeCommonAttrs(QXmlStreamWriter &w, const ReverieCore::LayerEntry &e)
         w.writeAttribute("stroke_color", QString::number(e.strokeColor));
         w.writeAttribute("stroke_pos", QString::number(e.strokePosition));
         w.writeAttribute("stroke_opacity", QString::number(e.strokeOpacity));
+    }
+    if (e.nodeType == ReverieCore::NodeTypeTransparencyMask || (node && node->property("reverie_is_transparency_mask").toBool())) {
+        w.writeAttribute("is_transparency_mask", "1");
     }
 }
 
@@ -218,6 +225,10 @@ bool ReverieCore::loadLayersXmlTree(const QByteArray &xmlData, KisImageSP image,
             }
             const QString op = a.value("compositeop").toString();
             if (!op.isEmpty()) l->setCompositeOpId(op);
+            // 穿透混合模式恢复 (仅组有语义, writeCommonAttrs 写入)
+            if (KisGroupLayer *g = dynamic_cast<KisGroupLayer *>(node.data())) {
+                g->setPassThroughMode(a.value("pass_through") == QLatin1String("1"));
+            }
             // alpha_locked 仅颜料层子类支持
             if (KisPaintLayer *pl = dynamic_cast<KisPaintLayer *>(l)) {
                 pl->setAlphaLocked(a.value("alpha_locked") == QLatin1String("1"));
@@ -242,6 +253,9 @@ bool ReverieCore::loadLayersXmlTree(const QByteArray &xmlData, KisImageSP image,
             node->setProperty("reverie_stroke_color", okColor ? sCol : 0xFF000000u);
             node->setProperty("reverie_stroke_pos", attrInt("stroke_pos", 0));
             node->setProperty("reverie_stroke_opacity", attrInt("stroke_opacity", 100));
+        }
+        if (a.value("is_transparency_mask") == QLatin1String("1")) {
+            node->setProperty("reverie_is_transparency_mask", true);
         }
     };
 
@@ -338,9 +352,31 @@ bool ReverieCore::loadLayersXmlTree(const QByteArray &xmlData, KisImageSP image,
                 }
                 node = pl;
             } else if (name == QLatin1String("transparencymask")) {
-                node = new KisTransparencyMask(image, nodeName);
+                const QString fn = r.attributes().value("filename").toString();
+                QByteArray png;
+                if (!fn.isEmpty() && store->open(fn)) {
+                    png = readStoreEntryBytes(store);
+                    store->close();
+                }
+                // 在现代架构中，透明度蒙版作为 KisPaintLayer 挂载在图层树中
+                KisPaintLayerSP tmask = new KisPaintLayer(image, nodeName.isEmpty() ? QStringLiteral("蒙版") : nodeName, 255, cs);
+                tmask->setProperty("reverie_is_transparency_mask", true);
+                if (!png.isEmpty()) {
+                    PendingLayerPixels job;
+                    job.dev = tmask->original();
+                    job.pngBytes = png;
+                    job.hasPng = true;
+                    job.hasData = true;
+                    loader.stage(job);
+                } else {
+                    tmask->paintDevice()->fill(QRect(0, 0, image->width(), image->height()), KoColor(Qt::white, cs));
+                }
+                node = tmask;
             } else if (name == QLatin1String("filtermask")) {
                 KisFilterMaskSP fm = new KisFilterMask(image, nodeName);
+                if (KisLayer *parentLayer = dynamic_cast<KisLayer *>(parents.last().data())) {
+                    fm->initSelection(parentLayer);
+                }
                 const QXmlStreamAttributes a = r.attributes();
                 auto attrDbl = [&a](const char *key) {
                     bool ok = false;

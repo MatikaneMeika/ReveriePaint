@@ -3,8 +3,10 @@
  */
 
 #include "ReverieCoreUndoStore.h"
+#include "ReverieCrashHandler.h"
 
 #include <kundo2stack.h>
+#include <cstdio>
 
 ReverieUndoStore::ReverieUndoStore()
     : m_undoStack(new KUndo2Stack)
@@ -54,6 +56,10 @@ void ReverieUndoStore::purgeRedoState()
 void ReverieUndoStore::undo()
 {
     if (m_undoStack && m_undoStack->canUndo()) {
+        char message[64];
+        std::snprintf(message, sizeof(message), "undo index=%d/%d",
+                      m_undoStack->index(), m_undoStack->count());
+        reverie_crash_handler_add_breadcrumb("HistoryNative", message);
         m_undoStack->undo();
     }
 }
@@ -61,6 +67,10 @@ void ReverieUndoStore::undo()
 void ReverieUndoStore::redo()
 {
     if (m_undoStack && m_undoStack->canRedo()) {
+        char message[64];
+        std::snprintf(message, sizeof(message), "redo index=%d/%d",
+                      m_undoStack->index(), m_undoStack->count());
+        reverie_crash_handler_add_breadcrumb("HistoryNative", message);
         m_undoStack->redo();
     }
 }

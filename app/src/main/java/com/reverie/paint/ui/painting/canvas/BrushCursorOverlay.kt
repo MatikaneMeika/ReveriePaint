@@ -11,6 +11,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.unit.dp
 import com.reverie.paint.core.PaintViewModel
 import com.reverie.paint.model.Tool
@@ -106,6 +108,44 @@ internal fun BrushCursorOverlay(
                     drawLine(Color.Black.copy(alpha = 0.55f), Offset(curPos.x, curPos.y - len), Offset(curPos.x, curPos.y + len), strokeWidth = 1.8.dp.toPx())
                     drawLine(Color.White, Offset(curPos.x - len, curPos.y), Offset(curPos.x + len, curPos.y), strokeWidth = 1.0.dp.toPx())
                     drawLine(Color.White, Offset(curPos.x, curPos.y - len), Offset(curPos.x, curPos.y + len), strokeWidth = 1.0.dp.toPx())
+                }
+                6 -> { // 笔刷真实轮廓 (Brush Outline)
+                    val polys = vm.brushOutlinePolygons
+                    if (polys != null && polys.isNotEmpty()) {
+                        val path = androidx.compose.ui.graphics.Path()
+                        for (poly in polys) {
+                            val count = poly.size / 2
+                            if (count >= 2) {
+                                val startX = poly[0] * brushRadiusScreen
+                                val startY = poly[1] * brushRadiusScreen
+                                path.moveTo(startX, startY)
+                                for (i in 1 until count) {
+                                    val px = poly[i * 2] * brushRadiusScreen
+                                    val py = poly[i * 2 + 1] * brushRadiusScreen
+                                    path.lineTo(px, py)
+                                }
+                                path.close()
+                            }
+                        }
+                        val baseRot = (vm.brushAngle + vm.brushRotation).toFloat()
+                        rotate(degrees = baseRot, pivot = curPos) {
+                            translate(left = curPos.x, top = curPos.y) {
+                                drawPath(
+                                    path = path,
+                                    color = Color.Black.copy(alpha = 0.75f),
+                                    style = Stroke(width = 0.4.dp.toPx())
+                                )
+                            }
+                        }
+                    } else {
+                        // 回退单黑细圆环
+                        drawCircle(
+                            color = Color.Black.copy(alpha = 0.75f),
+                            radius = brushRadiusScreen,
+                            center = curPos,
+                            style = Stroke(width = 0.4.dp.toPx())
+                        )
+                    }
                 }
             }
         }

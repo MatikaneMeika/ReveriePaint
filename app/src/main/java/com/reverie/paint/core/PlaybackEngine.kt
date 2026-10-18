@@ -52,6 +52,8 @@ import com.reverie.paint.model.RecordingEvents.L_PASS_THROUGH
 import com.reverie.paint.model.RecordingEvents.L_RASTERIZE
 import com.reverie.paint.model.RecordingEvents.L_REMOVE
 import com.reverie.paint.model.RecordingEvents.L_REMOVE_MASK
+import com.reverie.paint.model.RecordingEvents.L_INVERT_MASK
+import com.reverie.paint.model.RecordingEvents.L_APPLY_MASK
 import com.reverie.paint.model.RecordingEvents.L_RENAME
 import com.reverie.paint.model.RecordingEvents.L_SET_BG
 import com.reverie.paint.model.RecordingEvents.L_SET_CURRENT
@@ -73,6 +75,7 @@ import com.reverie.paint.model.RecordingEvents.T_FEATHER
 import com.reverie.paint.model.RecordingEvents.T_FILL
 import com.reverie.paint.model.RecordingEvents.T_FILL_V2
 import com.reverie.paint.model.RecordingEvents.T_FILL_V3
+import com.reverie.paint.model.RecordingEvents.T_ENCLOSE_FILL
 import com.reverie.paint.model.RecordingEvents.T_GRADIENT
 import com.reverie.paint.model.RecordingEvents.T_GRADIENT_V2
 import com.reverie.paint.model.RecordingEvents.T_REDO
@@ -247,6 +250,7 @@ internal fun PaintViewModel.exitReplay() {
     // eraser context - the brush literally behaved like an eraser until the
     // user re-tapped the tool icon.
     renderHandler?.post {
+        ReverieCoreBridge.setUndoLimit(maxUndoSteps)
         ReverieCoreBridge.setUndoCaptureEnabled(true)
         ReverieCoreBridge.clearUndoHistory()
         restoreBrushStateFromUi()
@@ -419,8 +423,13 @@ internal fun PaintViewModel.resetReplayDocLocked(s: ReplaySession) {
         renderW = -1
         renderH = -1
         setRenderViewport(coreW, coreH)
+        ReverieCoreBridge.touchStrokeCancel()
         ReverieCoreBridge.resetStrokeCounter()
-        ReverieCoreBridge.setUndoLimit(maxUndoSteps)
+        // 回放期间不设撤销步数限制(0 = 无限): 回放严格重放笔画和 T_UNDO/T_REDO，
+        // 若使用常规 50 步上限，超过 50 步后旧命令从栈底被截断淘汰并调用 purgeHistory()，
+        // 后续遇到录制流中的 T_REDO 时将访问已损坏的 Memento 导致 SIGABRT 闪退。
+        // 退出回放时在 exitReplay() 中恢复正常 maxUndoSteps 并清空栈。
+        ReverieCoreBridge.setUndoLimit(0)
         ReverieCoreBridge.setUndoCaptureEnabled(true)
         ReverieCoreBridge.clearUndoHistory()
         // Paint the initial frame right away so the canvas isn't stale
@@ -579,6 +588,9 @@ private fun PaintViewModel.dispatchReplayLocked(
 }
 
 private fun PaintViewModel.applyReplayContextLocked(c: com.reverie.paint.model.ReplayContext) {
+    if (currentReplayPreset != c.preset && currentReplayPreset >= 0) {
+        ReverieCoreBridge.touchStrokeCancel()
+    }
     currentReplayPreset = c.preset
     ReverieCoreBridge.setToolMode(c.toolMode)
     if (c.preset >= 0) {
@@ -755,6 +767,14 @@ private fun PaintViewModel.dispatchLayerOpLocked(
 
         L_REMOVE_MASK -> {
             ReverieCoreBridge.removeMask(i)
+        }
+
+        L_INVERT_MASK -> {
+            ReverieCoreBridge.invertMask(i)
+        }
+
+        L_APPLY_MASK -> {
+            ReverieCoreBridge.applyMask(i)
         }
 
         L_ADD_LAYER_TYPE -> {
@@ -1117,6 +1137,28 @@ private fun PaintViewModel.dispatchToolOpLocked(
                 IntArray(pts.size) { pts[it].first },
                 IntArray(pts.size) { pts[it].second },
                 pts.size,
+            )
+        }
+
+        T_ENCLOSE_FILL -> {
+            val count = r.u16()
+            val xs = IntArray(count)
+            val ys = IntArray(count)
+            for (i in 0 until count) {
+                xs[i] = r.f32().toInt()
+                ys[i] = r.f32().toInt()
+            }
+            val tol = r.u16()
+            val sampleMerged = r.u8() != 0
+            val expand = r.i16()
+            val feather = r.u16()
+            val closeGap = r.u16()
+            val regionSelectionMethod = r.u8()
+            val regionColorArgb = r.u32()
+            val includeContourRegions = r.u8() != 0
+            ReverieCoreBridge.encloseAndFill(
+                xs, ys, count, tol, sampleMerged, expand, feather, closeGap,
+                regionSelectionMethod, regionColorArgb, includeContourRegions
             )
         }
 

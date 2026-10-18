@@ -396,6 +396,18 @@ Java_com_reverie_paint_core_ReverieCoreBridge_removeMask(JNIEnv *, jobject, jint
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
+Java_com_reverie_paint_core_ReverieCoreBridge_invertMask(JNIEnv *, jobject, jint layerIndex)
+{
+    return core()->invertMask(layerIndex);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_reverie_paint_core_ReverieCoreBridge_applyMask(JNIEnv *, jobject, jint layerIndex)
+{
+    return core()->applyMask(layerIndex);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
 Java_com_reverie_paint_core_ReverieCoreBridge_rasterizeLayer(JNIEnv *, jobject, jint index)
 {
     return core()->rasterizeLayer(index);
@@ -471,6 +483,34 @@ Java_com_reverie_paint_core_ReverieCoreBridge_renderLayerThumb(JNIEnv *env, jobj
         ok = core()->renderLayerThumb(index, info.width, info.height, pixels, info.stride);
     } catch (...) {
         __android_log_print(ANDROID_LOG_ERROR, "ReverieCore", "renderLayerThumb threw exception for layer %d", (int)index);
+        ok = false;
+    }
+    AndroidBitmap_unlockPixels(env, bitmap);
+    return ok ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_reverie_paint_core_ReverieCoreBridge_renderLayerCanvas(JNIEnv *env, jobject, jint index, jobject bitmap)
+{
+    if (!bitmap) {
+        return JNI_FALSE;
+    }
+    AndroidBitmapInfo info;
+    if (AndroidBitmap_getInfo(env, bitmap, &info) != ANDROID_BITMAP_RESULT_SUCCESS) {
+        return JNI_FALSE;
+    }
+    if (info.width <= 0 || info.height <= 0 || info.stride < (info.width * 4)) {
+        return JNI_FALSE;
+    }
+    void *pixels = nullptr;
+    if (AndroidBitmap_lockPixels(env, bitmap, &pixels) != ANDROID_BITMAP_RESULT_SUCCESS) {
+        return JNI_FALSE;
+    }
+    bool ok = false;
+    try {
+        ok = core()->renderLayerCanvas(index, info.width, info.height, pixels, info.stride);
+    } catch (...) {
+        __android_log_print(ANDROID_LOG_ERROR, "ReverieCore", "renderLayerCanvas threw exception for layer %d", (int)index);
         ok = false;
     }
     AndroidBitmap_unlockPixels(env, bitmap);

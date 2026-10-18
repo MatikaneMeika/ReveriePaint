@@ -472,10 +472,27 @@ object ReverieCoreBridge {
         closeGap: Int = 4,
     )
 
+    external fun encloseAndFill(
+        xs: IntArray,
+        ys: IntArray,
+        count: Int,
+        tolerance: Int,
+        sampleMerged: Boolean = true,
+        expand: Int = 0,
+        feather: Int = 0,
+        closeGap: Int = 4,
+        regionSelectionMethod: Int = 0,
+        regionColorArgb: Int = 0,
+        includeContourRegions: Boolean = false,
+    )
+
     external fun setBrushSize(size: Double)
 
     /** 当前预设 Size 压感曲线求值：pressure(0..1) → 实际笔刷直径比例(0..1)，光标环同源缩放 */
     external fun brushPressureFraction(pressure: Float): Float
+
+    /** 获取当前笔刷的基准归一化轮廓多边形点集 (以半宽半高归一化到 [-1, 1]) */
+    external fun getCurrentBrushOutline(): FloatArray?
 
     external fun setBrushColor(color: String)
 
@@ -644,6 +661,27 @@ object ReverieCoreBridge {
 
     /** Dirty content exists but the projection recomposite is still running. */
     external fun renderPendingDirty(): Boolean
+
+    /**
+     * 显示瓦片网格的帧准备: 合成脏区并把本帧脏区快照进 [outRects]
+     * (`x,y,w,h` x N, 文档坐标), 返回块数 (最多 8)。0 表示这一帧没有新像素。
+     * 必须在同一帧的 [renderTileToBuffer] 之前调用。
+     */
+    external fun beginRenderTiles(outRects: IntArray): Int
+
+    /**
+     * 把文档坐标 `(docX, docY)` 起、尺寸 = [bitmap] 的一块写进瓦片位图 (原点 0,0 = 瓦片左上角,
+     * 必须是 ARGB_8888 且行步长 = 宽 * 4)。[dirtyRects] 是本帧脏区 (`x,y,w,h` x N, 文档坐标);
+     * 空数组表示整块瓦片都要重写。[outWritten] 回传实际写过的区域 (瓦片局部坐标, `x,y,w,h`)。
+     * 返回 false 表示这块瓦片本帧没有像素要写, 调用方不要发布它。
+     */
+    external fun renderTileToBuffer(
+        bitmap: Bitmap,
+        docX: Int,
+        docY: Int,
+        dirtyRects: IntArray,
+        outWritten: IntArray,
+    ): Boolean
 
     external fun pickColorAt(
         x: Int,
@@ -971,6 +1009,11 @@ object ReverieCoreBridge {
         bitmap: Bitmap,
     ): Boolean
 
+    external fun renderLayerCanvas(
+        index: Int,
+        bitmap: Bitmap,
+    ): Boolean
+
     external fun startTransformPreview(bitmap: Bitmap): Boolean
 
     external fun startTransformPreviewLayers(
@@ -1171,6 +1214,10 @@ object ReverieCoreBridge {
     ): Boolean
 
     external fun removeMask(layerIndex: Int): Boolean
+ 
+    external fun invertMask(layerIndex: Int): Boolean
+
+    external fun applyMask(layerIndex: Int): Boolean
 
     external fun rasterizeLayer(index: Int): Boolean
 
