@@ -4928,6 +4928,29 @@ class PaintViewModel : ViewModel() {
         }
     }
 
+    // Created once per ViewModel; ticks must not capture a new runCore lambda per frame.
+    internal val liquifyMaterializeRunnable = Runnable {
+        pendingCoreOps.decrementPositive()
+        try {
+            liquifyMaterializePending = ReverieCoreBridge.liquifyMaterializeTick()
+            // The last batch can write pixels while returning pending=false.
+            if (ReverieCoreBridge.renderPendingDirty()) scheduleRender()
+        } catch (t: Throwable) {
+            android.util.Log.e("ReverieCore", "Liquid materialization failed", t)
+        } finally {
+            liquifyMaterializeGate.finish()
+        }
+    }
+
+    private val scheduledRenderTask = Runnable {
+        pendingRenderRunnable = null
+        renderScheduled = false
+        doRender()
+    }
+
+    // Separate identity preserves immediate-render cancellation semantics.
+    internal val directRenderTask = Runnable { doRender() }
+
     internal val pendingCoreOps = java.util.concurrent.atomic.AtomicInteger(0)
     internal val pendingHistoryOps = java.util.concurrent.atomic.AtomicInteger(0)
 
@@ -5433,7 +5456,7 @@ class PaintViewModel : ViewModel() {
             pendingRenderRunnable?.let { h.removeCallbacks(it) }
             pendingRenderRunnable = null
             renderScheduled = false
-            h.post { doRender() }
+            h.post(directRenderTask)
             return
         }
         // Post immediately. The old fixed +16ms delay existed because renders
@@ -5445,14 +5468,11 @@ class PaintViewModel : ViewModel() {
         // was two full frames of constant pen latency on 120Hz panels.
         if (renderScheduled) return
         renderScheduled = true
-        val r =
-            Runnable {
-                pendingRenderRunnable = null
-                renderScheduled = false
-                doRender()
-            }
-        pendingRenderRunnable = r
-        h.post(r)
+        pendingRenderRunnable = scheduledRenderTask
+        if (!h.post(scheduledRenderTask)) {
+            pendingRenderRunnable = null
+            renderScheduled = false
+        }
     }
 
     @Volatile internal var liquifyPresentationGesture = 0L
@@ -5463,8 +5483,9 @@ class PaintViewModel : ViewModel() {
         if (liquifyPresentation.consume(liquifyPresentationGesture, bitmap)) LiquifyGpuPreview.clear()
     }
 
-    internal fun onLiquifyTilesDrawn(frame: PublishedTiles) {
-        if (liquifyPresentation.consume(liquifyPresentationGesture, frame)) LiquifyGpuPreview.clear()
+    internal fun onLiquifyTilesDrawn(frame: PublishedTiles, version: Long) {
+        if (version < 0L || !frame.frameVersion.isCurrent(version)) return
+        if (liquifyPresentation.consume(liquifyPresentationGesture, frame, version)) LiquifyGpuPreview.clear()
     }
 
     internal var renderDeferCount = 0
@@ -5557,7 +5578,7 @@ class PaintViewModel : ViewModel() {
         PerfTrace.tick("render.calls", 1000L)
         if (!ok) {
             if (ReverieCoreBridge.renderPendingDirty()) {
-                rh?.postDelayed({ doRender() }, 4L)
+                rh?.postDelayed(directRenderTask, 4L)
             } else if (liquifyPresentation.isPending(liquifyPresentationGesture)) {
                 displayBitmap?.let { liquifyPresentation.publish(liquifyPresentationGesture, it) }
                 com.reverie.paint.ui.painting.canvas.CanvasTouchView.activeTouchView?.invalidateFromRender()

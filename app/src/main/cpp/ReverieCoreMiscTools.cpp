@@ -747,7 +747,8 @@ bool ReverieCore::liquifyDrainMaterialize(bool force)
     reverie::DirtyRectList changedRegions;
     // Keep all non-paint layer semantics on the existing bounding-region path.
     bool splitComposite = !m_liquifyGraphProjection;
-    for (const LayerEntry &entry : m_layers) {
+    const auto &layers = m_layers; // Const iteration avoids detaching Qt shared storage.
+    for (const LayerEntry &entry : layers) {
         if (!dynamic_cast<KisPaintLayer *>(entry.node)) {
             splitComposite = false;
             break;

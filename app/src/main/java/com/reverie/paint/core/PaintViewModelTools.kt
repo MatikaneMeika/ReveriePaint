@@ -1774,16 +1774,14 @@ private const val LIQUIFY_DAB_STRIDE = 6
  * 队列空时 C++ 侧只做一次空检查, 开销可忽略。
  */
 internal fun PaintViewModel.tickLiquifyMaterialize() {
-    if (renderHandler == null || !liquifyMaterializeGate.tryQueue()) return
-    runCore(render = false) {
-        try {
-            liquifyMaterializePending = ReverieCoreBridge.liquifyMaterializeTick()
-            // A final tick can write pixels yet return false (queue drained). Refresh
-            // from native dirty state, rather than waiting for another input event.
-            if (ReverieCoreBridge.renderPendingDirty()) scheduleRender()
-        } finally {
-            liquifyMaterializeGate.finish()
-        }
+    val handler = renderHandler ?: return
+    if (!liquifyMaterializeGate.tryQueue()) return
+    pendingCoreOps.incrementAndGet()
+    if (!handler.post(liquifyMaterializeRunnable)) {
+        // A quitting Handler rejects the task: release both reservations here,
+        // since the runnable's finally block will never execute.
+        pendingCoreOps.decrementPositive()
+        liquifyMaterializeGate.finish()
     }
 }
 

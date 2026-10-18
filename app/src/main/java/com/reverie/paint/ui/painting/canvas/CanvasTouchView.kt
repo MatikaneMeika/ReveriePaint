@@ -2647,7 +2647,8 @@ class CanvasTouchView(context: Context) : View(context) {
      * 视口外的瓦片连绘制命令都不发: 没被画过的位图不会被 HWUI 建纹理, 真正滚进视口时才上传;
      * 已上传又没被重写的瓦片则直接命中纹理缓存。
      */
-    private fun drawDisplayTiles(canvas: Canvas, tiles: com.reverie.paint.core.PublishedTiles) {
+    private fun drawDisplayTiles(canvas: Canvas, tiles: com.reverie.paint.core.PublishedTiles): Long {
+        val version = tiles.frameVersion.capture()
         val grid = tiles.grid
         ensureViewTransform()
         visibleBitmapBounds(boundsScratch)
@@ -2662,15 +2663,21 @@ class CanvasTouchView(context: Context) : View(context) {
                 boundsScratch[3],
                 tileDrawScratch,
             )
-        if (n <= 0) return
+        if (n <= 0) return -1L
+        var complete = true
         val halfW = grid.width / 2f
         val halfH = grid.height / 2f
         for (k in 0 until n) {
             val tx = tileDrawScratch[k * 2]
             val ty = tileDrawScratch[k * 2 + 1]
             val idx = grid.tileIndex(tx, ty)
-            val tile = tiles.tiles.get(idx) ?: continue
-            if (tile.isRecycled) continue
+            val tile = tiles.tiles.get(idx)
+            if (tile == null || tile.isRecycled) {
+                complete = false
+                continue
+            }
+            // Preserve RFC106's ownership state machine.
+            tiles.markDrawn(idx)
             // 过滤开着时不能直接 drawBitmap: 边上会采到瓦片外的透明, 棋盘格透成网格。
             clampedTiles.draw(
                 canvas,
@@ -2682,6 +2689,7 @@ class CanvasTouchView(context: Context) : View(context) {
                 directBitmapPaint.isFilterBitmap,
             )
         }
+        return if (complete && tiles.frameVersion.isCurrent(version)) version else -1L
     }
 
     private fun drawCanvas(canvas: Canvas) {
@@ -2732,9 +2740,9 @@ class CanvasTouchView(context: Context) : View(context) {
                 if (largeBitmapTiles != null) {
                     releaseLargeBitmapTiles()
                 }
-                drawDisplayTiles(canvas, tiles)
-                // Acknowledge the exact immutable frame consumed above.
-                v.onLiquifyTilesDrawn(tiles)
+                val drawnVersion = drawDisplayTiles(canvas, tiles)
+                // A reused grid is acknowledged only if no write overlapped this draw.
+                v.onLiquifyTilesDrawn(tiles, drawnVersion)
             } else if (bmp != null) {
                 clampedTiles.clear()
                 if (LargeBitmapTilingPolicy.isLargeBitmap(bmp.byteCount.toLong())) {
