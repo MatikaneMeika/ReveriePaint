@@ -12,6 +12,7 @@
 #include "PixelAlpha.h"
 #include "PixelRegion.h"
 #include "LiquifyMaterializeBatch.h"
+#include "DirtyRectList.h"
 #include "LiquifyPixelSampling.h"
 #include "kis_liquify_transform_worker.h"
 #include <QtConcurrent/QtConcurrentMap>
@@ -743,6 +744,15 @@ bool ReverieCore::liquifyDrainMaterialize(bool force)
     if (!force && budget <= 0) return false;
     const qint64 t0 = QDateTime::currentMSecsSinceEpoch();
     QRect changed;
+    reverie::DirtyRectList changedRegions;
+    // Keep all non-paint layer semantics on the existing bounding-region path.
+    bool splitComposite = !m_liquifyGraphProjection;
+    for (const LayerEntry &entry : m_layers) {
+        if (!dynamic_cast<KisPaintLayer *>(entry.node)) {
+            splitComposite = false;
+            break;
+        }
+    }
     while (!m_liquifyMatQueue.isEmpty()) {
         // Adjacent tiles on one row share a single warp/painter/composite operation.
         // Keep the interactive quantum bounded; pen-up can consume a full row.
@@ -759,16 +769,30 @@ bool ReverieCore::liquifyDrainMaterialize(bool force)
         // 32-row chunk: no renderer can observe this engine-thread batch midway.
         liquifyApplyLocked(band, false);
         changed = changed.isEmpty() ? band : changed.united(band);
+        if (splitComposite) {
+            reverie::appendOrCoalesce(changedRegions, {band.x(), band.y(), band.width(), band.height()});
+        }
         if (!force && QDateTime::currentMSecsSinceEpoch() - t0 >= budget) break;
     }
     if (!changed.isEmpty() && !m_soloedNode && m_document) {
         const qint64 compositeStart = QDateTime::currentMSecsSinceEpoch();
-        liquifyRecomposeProjection(changed);
+        qint64 compositeArea = 0;
+        if (splitComposite) {
+            // At most eight regions, after all writes in this engine-thread batch.
+            for (int i = 0; i < changedRegions.count; ++i) {
+                const reverie::DirtyRect &r = changedRegions.rects[i];
+                liquifyRecomposeProjection(QRect(r.x, r.y, r.w, r.h));
+                compositeArea += reverie::dirtyRectArea(r);
+            }
+        } else {
+            liquifyRecomposeProjection(changed);
+            compositeArea = qint64(changed.width()) * changed.height();
+        }
         const qint64 compositeMs = QDateTime::currentMSecsSinceEpoch() - compositeStart;
         const qint64 totalMs = QDateTime::currentMSecsSinceEpoch() - t0;
         s_liquifyStats[LqComposite].store(compositeMs, std::memory_order_relaxed);
         s_liquifyStats[LqTotal].store(totalMs, std::memory_order_relaxed);
-        s_liquifyStats[LqAreaPx].store(qint64(changed.width()) * changed.height(), std::memory_order_relaxed);
+        s_liquifyStats[LqAreaPx].store(compositeArea, std::memory_order_relaxed);
         m_liquifyLastApplyMs = QDateTime::currentMSecsSinceEpoch();
         m_liquifyApplyIntervalMs = qBound<qint64>(LIQUIFY_APPLY_MIN_INTERVAL_MS, totalMs * 2, 64);
     }

@@ -134,6 +134,42 @@ static void testEmptyInputIsNoOp()
     check(l.rects[0].x == 10 && l.rects[0].y == 10, "existing rect untouched");
 }
 
+// Liquify drains distant 128x32 materialization bands; capacity pressure must
+// never lose pixels even when the coalescer creates conservative larger regions.
+static void testLiquifyBandsPreserveCoverage()
+{
+    DirtyRectList list;
+    DirtyRect input[20];
+    for (int i = 0; i < 20; ++i) {
+        input[i] = rect((i % 5) * 768, (i / 5) * 640, 128, 32);
+        appendOrCoalesce(list, input[i]);
+    }
+    bool covered = true;
+    for (const DirtyRect &band : input) {
+        for (int y = band.y; y < band.y + band.h; ++y) {
+            for (int x = band.x; x < band.x + band.w; ++x) {
+                bool found = false;
+                for (int j = 0; j < list.count; ++j) {
+                    const DirtyRect &r = list.rects[j];
+                    found |= x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h;
+                }
+                covered &= found;
+            }
+        }
+    }
+    check(covered, "all liquid materialization pixels survive capacity merging");
+    check(list.count <= DirtyRectList::kCapacity, "liquid drain composite calls stay bounded");
+
+    DirtyRectList sparse;
+    appendOrCoalesce(sparse, rect(0, 0, 512, 32));
+    appendOrCoalesce(sparse, rect(3072, 3072, 512, 32));
+    check(totalArea(sparse) == 2LL * 512 * 32, "distant liquid bands exclude untouched gap");
+    DirtyRectList dense;
+    for (int y = 0; y < 512; y += 32) appendOrCoalesce(dense, rect(0, y, 512, 32));
+    check(dense.count == 1 && totalArea(dense) == 512LL * 512,
+          "adjacent liquid bands keep one composite call");
+}
+
 int main()
 {
     testTwoCornersStaySplit();
@@ -142,6 +178,7 @@ int main()
     testHollowOver25PercentStaysSplit();
     testNinthRectCollapsesCheapestPair();
     testEmptyInputIsNoOp();
+    testLiquifyBandsPreserveCoverage();
 
     std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

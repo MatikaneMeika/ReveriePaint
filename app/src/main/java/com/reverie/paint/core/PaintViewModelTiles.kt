@@ -17,8 +17,8 @@ import java.util.concurrent.atomic.AtomicReferenceArray
 //  1. lockPixels 的目标是瓦片 (512x512), 不是整幅画布 —— 未被命中的瓦片位图引用不变,
 //     HWUI 直接复用显存里的旧纹理, 本帧纹理上传量 = 命中瓦片面积。
 //  2. 命中集合按**离散脏区**逐个求, 不取脏区并集: 两个对角 dab 只上传那两块。
-//  3. 没有整幅 front/back 同步: 换下来的旧瓦片进冷却区, 下一帧才允许被重写,
-//     onDraw 交给过 HWUI 的位图不会被就地写 (COW); 没交给过的才就地写。
+//  3. 已发布的位图及引用集合不再改写。仅复制变动瓦片，未变动瓦片跨帧共享。
+//     只有尚未发布的 staging 位图可就地写；已发布旧位图由 GC 回收。
 //
 // 除 discardTileGridForDocumentSwitch 外, 本文件的函数都只在渲染线程上调用。
 // ==================================================================
@@ -31,9 +31,8 @@ internal fun PaintViewModel.shouldRenderDisplayTiles(w: Int, h: Int): Boolean =
 
 internal fun PaintViewModel.doRenderTiles(w: Int, h: Int) {
     val st = displayTiles
-    val target = ensureDisplayTileGrid(w, h) ?: return
-    val grid = target.grid
-    val tiles = target.tiles
+    val current = ensureDisplayTileGrid(w, h) ?: return
+    val grid = current.grid
 
     pollLiquifyGpuPreview()
     pollLiquifyStats()
@@ -49,8 +48,6 @@ internal fun PaintViewModel.doRenderTiles(w: Int, h: Int) {
     if (dirtyCount < DisplayTileState.DIRTY_CAP) {
         java.util.Arrays.fill(dirtyRects, dirtyCount * 4, dirtyRects.size, 0)
     }
-
-    st.promoteCooledSpares()
 
     // 命中集合 = 需要整块重写的瓦片 ∪ 本帧脏区覆盖到的瓦片 (逐块去重)。
     val needsFull = st.needsFullWrite
@@ -91,18 +88,18 @@ internal fun PaintViewModel.doRenderTiles(w: Int, h: Int) {
         return
     }
 
+    // Copy references only for frames that actually write. Pixel copies remain local to hit tiles.
+    val target = if (current === st.staging) current else current.copyReferences()
+    val tiles = target.tiles
     var writtenLeft = Int.MAX_VALUE
     var writtenTop = Int.MAX_VALUE
     var writtenRight = Int.MIN_VALUE
     var writtenBottom = Int.MIN_VALUE
     var wrotePixels = 0L
     var anyFull = false
-    // 就地写期间 onDraw 恰好画了这张瓦片: HWUI 可能上传了写到一半的像素, 本帧要补一次主画布失效。
-    var tornInPlace = false
     var retryNeeded = false
     val written = st.written
     val cols = grid.cols
-    val drawn = target.drawnByView
     for (k in 0 until hits) {
         val idx = hitList[k]
         val tx = idx % cols
@@ -115,10 +112,8 @@ internal fun PaintViewModel.doRenderTiles(w: Int, h: Int) {
         val validOld = old != null && !old.isRecycled && old.width == tw && old.height == th
         // 位图尺寸对不上 (角落瓦片/文档尺寸变了) 只能整块写。
         val full = needsFull[idx] || !validOld
-        // 交给过 HWUI 的瓦片位图不就地改写, 取后备位图写好再换进去 (COW)。自换入以来没被
-        // onDraw 画过的位图不在任何 DisplayList 里, 占住 (CAS 到 WRITING) 之后就地写。
-        val inPlace =
-            validOld && drawn.compareAndSet(idx, PublishedTiles.TILE_UNDRAWN, PublishedTiles.TILE_WRITING)
+        // Only unpublished staging owns its pixels exclusively.
+        val inPlace = validOld && target === st.staging
         val dst = if (inPlace) old!! else st.obtainSpare(tw, th)
         if (dst == null) {
             // OOM 获取后备位图失败: 标记整块重写并触发低优先级重试
@@ -142,24 +137,16 @@ internal fun PaintViewModel.doRenderTiles(w: Int, h: Int) {
                 android.util.Log.e("PaintViewModel", "renderTileToBuffer failed at ($tx,$ty)", t)
                 false
             }
-        if (inPlace &&
-            !drawn.compareAndSet(idx, PublishedTiles.TILE_WRITING, PublishedTiles.TILE_UNDRAWN)
-        ) {
-            // CAS 失败 = 写的过程中 onDraw 把它标成了已画: 标记保持 DRAWN, 下一帧起走 COW。
-            tornInPlace = true
-        }
         if (!ok) {
-            // 本帧写失败 (JNI 失败/格式不符): 后备位图还回冷却区, 标记整块重写以防脏区丢失。
-            if (!inPlace) st.retireToCooling(dst)
+            // 本帧写失败 (JNI 失败/格式不符): 未发布后备位图回池, 标记整块重写以防脏区丢失。
+            if (!inPlace) st.retainUnpublished(dst)
             needsFull[idx] = true
             retryNeeded = true
             continue
         }
         if (!inPlace) {
-            // 先清标记再换入: onDraw 是"先取位图再标记", 这样它拿到新位图之后的标记一定不会被这里覆盖。
-            drawn.set(idx, PublishedTiles.TILE_UNDRAWN)
             tiles.set(idx, dst)
-            if (old != null) st.retireToCooling(old)
+            // old may still belong to a UI/RenderThread frame; never recycle or pool it.
         }
         if (needsFull[idx]) anyFull = true
         needsFull[idx] = false
@@ -179,21 +166,7 @@ internal fun PaintViewModel.doRenderTiles(w: Int, h: Int) {
         // 命中了但一块都没写成 (JNI 失败/OOM): 当作无操作。
         clearRenderWrittenRect()
         onTileRenderNoWork()
-        if (retryNeeded) {
-            st.consecutiveRetryFailures++
-            if (st.consecutiveRetryFailures <= 3) {
-                scheduleRender(immediate = false)
-            } else {
-                android.util.Log.w(
-                    "DisplayTiles",
-                    "Tile render retry failed ${st.consecutiveRetryFailures} times consecutively, aborting retry spin",
-                )
-                st.needsFullWrite.fill(false)
-                st.consecutiveRetryFailures = 0
-            }
-        } else {
-            st.consecutiveRetryFailures = 0
-        }
+        scheduleTileRecovery(retryNeeded)
         return
     }
     publishRenderWrittenRect(writtenLeft, writtenTop, writtenRight, writtenBottom)
@@ -211,7 +184,7 @@ internal fun PaintViewModel.doRenderTiles(w: Int, h: Int) {
     if (st.staging === target) {
         if (st.needsFullWrite.any { it }) {
             // 还有瓦片没写成 (OOM 等): 不发布半张网格, 下一帧接着写。
-            scheduleRender(immediate = false)
+            scheduleTileRecovery(true)
             return
         }
         st.publishStaging()
@@ -219,12 +192,16 @@ internal fun PaintViewModel.doRenderTiles(w: Int, h: Int) {
         releaseFullCanvasBuffers()
     }
 
+    if (st.published !== target) st.publishFrame(target)
+    // Only a complete frame may retire the liquid preview. The UI consumes this
+    // exact immutable reference set, not a separately composed bitmap.
+    if (!retryNeeded) liquifyPresentation.publish(liquifyPresentationGesture, target)
     publishTileSnapshotIfNeeded(grid, tiles)
     // 前缓冲真墨: 运笔按住时把本帧离散脏区从瓦片烤好贴上前缓冲, 接住了就不失效主画布。
     val sink = realInkSink
     val published = st.published
     val kept =
-        sink != null && published != null &&
+        sink != null && published != null && !liquifyPresentation.isPending(liquifyPresentationGesture) &&
             sink.presentTileFrame(
                 published,
                 dirtyRects,
@@ -237,23 +214,7 @@ internal fun PaintViewModel.doRenderTiles(w: Int, h: Int) {
             )
     sink?.finishFrame(kept)
     notifyCanvasFramePublished(keptOnFrontBuffer = kept)
-    // 被撕裂的那张瓦片在前缓冲上是完整的, 但主画布的纹理可能是半张: 补一次失效让 HWUI 重传。
-    if (kept && tornInPlace) invalidateCanvasFromRender()
-    if (retryNeeded) {
-        st.consecutiveRetryFailures++
-        if (st.consecutiveRetryFailures <= 3) {
-            scheduleRender(immediate = false)
-        } else {
-            android.util.Log.w(
-                "DisplayTiles",
-                "Tile render retry failed ${st.consecutiveRetryFailures} times consecutively, aborting retry spin",
-            )
-            st.needsFullWrite.fill(false)
-            st.consecutiveRetryFailures = 0
-        }
-    } else {
-        st.consecutiveRetryFailures = 0
-    }
+    scheduleTileRecovery(retryNeeded)
 
     TilePerfLog.frame(
         tAfterCompositeNs - tStartNs,
@@ -266,14 +227,21 @@ internal fun PaintViewModel.doRenderTiles(w: Int, h: Int) {
     )
 }
 
+/** Bound automatic retries without forgetting pixels already consumed from native dirty state. */
+private fun PaintViewModel.scheduleTileRecovery(failed: Boolean) {
+    if (displayTiles.recovery.shouldRetry(failed)) scheduleRender(immediate = false)
+    // Keep needsFullWrite set. The next external render request can retry safely.
+}
+
 /** 瓦片路径的"这一帧没有新像素"收尾 (与整图路径保持同样的重试/液化语义)。 */
 private fun PaintViewModel.onTileRenderNoWork() {
     if (ReverieCoreBridge.renderPendingDirty()) {
         renderHandler?.postDelayed({ doRender() }, 4L)
-    } else if (liquifyPresentation.isPending(liquifyPresentationGesture)) {
+    } else if (!displayTiles.needsFullWrite.any { it } &&
+        liquifyPresentation.isPending(liquifyPresentationGesture)
+    ) {
         val p = displayTiles.published
-        val snap = if (p != null) composeTileSnapshot(p.grid, p.tiles) else displayBitmap
-        snap?.let { liquifyPresentation.publish(liquifyPresentationGesture, it) }
+        p?.let { liquifyPresentation.publish(liquifyPresentationGesture, it) }
         invalidateCanvasFromRender()
     }
 }
@@ -388,22 +356,20 @@ private fun copyTileInto(src: Bitmap, dst: Bitmap) {
 }
 
 /**
- * 参考窗口/液化上屏需要"一张整图", 瓦片路径下按需把瓦片拼进快照。
+ * 参考窗口需要"一张整图", 瓦片路径下按需把瓦片拼进快照。
  * 只在那些功能真的开着时才拼; 运笔期间最多每 SNAPSHOT_MIN_MS 拼一次 ——
  * 整图快照是整幅画布的软件拼装, 每帧都做会把瓦片网格省下的带宽原样还回去。
  */
 private fun PaintViewModel.publishTileSnapshotIfNeeded(grid: DisplayTileGrid, tiles: AtomicReferenceArray<Bitmap?>) {
-    val liquifyPending = liquifyPresentation.isPending(liquifyPresentationGesture)
-    if (!referenceWindowOpen && !liquifyPending) return
+    if (!referenceWindowOpen) return
     val st = displayTiles
     val now = SystemClock.uptimeMillis()
-    if (!liquifyPending && isStrokeRenderActive() && now - st.lastSnapshotMs < DisplayTileState.SNAPSHOT_MIN_MS) {
+    if (isStrokeRenderActive() && now - st.lastSnapshotMs < DisplayTileState.SNAPSHOT_MIN_MS) {
         return
     }
     st.lastSnapshotMs = now
     val snap = composeTileSnapshot(grid, tiles) ?: return
     displayBitmap = snap
-    if (liquifyPending) liquifyPresentation.publish(liquifyPresentationGesture, snap)
 }
 
 private fun PaintViewModel.composeTileSnapshot(grid: DisplayTileGrid, tiles: AtomicReferenceArray<Bitmap?>): Bitmap? {

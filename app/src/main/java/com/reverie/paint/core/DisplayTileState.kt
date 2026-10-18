@@ -6,54 +6,22 @@ package com.reverie.paint.core
 
 import android.graphics.Bitmap
 import com.reverie.paint.model.DisplayTileGrid
-import java.util.concurrent.atomic.AtomicIntegerArray
+import com.reverie.paint.model.DisplayTileRecovery
 import java.util.concurrent.atomic.AtomicReferenceArray
 
-/**
- * 一份已发布的显示瓦片网格: 几何与瓦片数组成对发布, onDraw 读到的两者必然属于同一份网格。
- *
- * 瓦片数组用 [AtomicReferenceArray]: 渲染线程 set 元素、UI 线程 onDraw get 元素, 每次 set 自带
- * volatile 语义 —— 普通数组的元素写在 ARM 上没有 happens-before 保证, onDraw 可能读到旧引用。
- */
+/** Published frames and their bitmaps are immutable after publication. */
 internal class PublishedTiles(
     val grid: DisplayTileGrid,
     val tiles: AtomicReferenceArray<Bitmap?>,
 ) {
-    /**
-     * 每张瓦片当前位图自换入以来有没有交给过 HWUI: [TILE_UNDRAWN] / [TILE_DRAWN] /
-     * [TILE_WRITING] (渲染线程正在就地写)。没交给过的位图不在任何 DisplayList 里,
-     * 渲染线程可以就地增量写, 省掉后备位图与整块拷贝 (运笔按住前缓冲时主画布不重绘, 最常见)。
-     */
-    val drawnByView = AtomicIntegerArray(grid.tileCount)
-
-    /** UI 线程: 这张瓦片要交给 HWUI 了 (onDraw 画它之前调用)。 */
-    fun markDrawn(idx: Int) {
-        if (idx in 0 until drawnByView.length()) drawnByView.set(idx, TILE_DRAWN)
-    }
-
-    companion object {
-        const val TILE_UNDRAWN = 0
-        const val TILE_DRAWN = 1
-        const val TILE_WRITING = 2
+    fun copyReferences(): PublishedTiles {
+        val copy = AtomicReferenceArray<Bitmap?>(grid.tileCount)
+        for (i in 0 until grid.tileCount) copy.set(i, tiles.get(i))
+        return PublishedTiles(grid, copy)
     }
 }
 
-/**
- * 512 显示瓦片网格的状态 (见 [PaintViewModel.doRenderTiles])。
- *
- * 线程分工:
- *  - 除 [requestDiscard] 外的一切写操作只在渲染线程 (reverie-render) 上发生;
- *  - UI 线程只读 [drawable] 返回的发布快照, 以及调用 [requestDiscard]。
- *
- * 双缓冲铁律在瓦片粒度上成立: 交给过 HWUI 的瓦片位图绝不会被就地重写。
- * 1. 写时复制 (COW): 一张瓦片要更新且已被 UI 线程标记为 TILE_DRAWN 时，渲染线程必须从后备池取新位图，
- *    写完后原子换进 tiles 数组;
- * 2. 3 级多帧冷却队列 (Stage 0 -> Stage 1 -> Stage 2 -> spareReady):
- *    Android HWUI 架构下 DisplayList 提交到 RenderThread 实际消费存在 2~3 帧时延。换下的旧位图
- *    必须在冷却阶段完整推移至少 2 帧，确认 HWUI 已释放纹理引用后，才允许进入 spareReady 复用；
- * 3. CAS 就地写例外: 仅当瓦片自换入以来从未被 onDraw 读取（保持 TILE_UNDRAWN，不存于任何 DisplayList）时，
- *    允许通过 CAS 原子抢占为 TILE_WRITING 并原地增量写入。
- */
+/** Engine-thread state; UI only reads the published frame and requests invalidation. */
 internal class DisplayTileState {
     /** 当前发布给 onDraw 的网格; null = 画布走整图路径 (或网格尚未建立)。 */
     @Volatile
@@ -74,27 +42,23 @@ internal class DisplayTileState {
     @Volatile
     private var discardHandled = 0
 
-    val spareReady = ArrayDeque<Bitmap>()
-    // 3 级多帧冷却队列：彻底覆盖 HWUI DisplayList 提交到 RenderThread 实际消费的 2~3 帧时延窗口。
-    // 新换下的位图先进入 stage0, 随后逐帧推移 stage0 -> stage1 -> stage2 -> spareReady。
-    // 确保任何从 COW 换下的位图在冷却区至少经历 2 次完整帧迭代才允许被重写复用。
-    val spareCoolingStage0 = ArrayList<Bitmap>(SPARE_CAP)
-    val spareCoolingStage1 = ArrayList<Bitmap>(SPARE_CAP)
-    val spareCoolingStage2 = ArrayList<Bitmap>(SPARE_CAP)
+    // Only failed, never-published destinations may be reused. Published bitmaps are
+    // left to GC: engine-frame counts do not prove that HWUI has released them.
+    private val spareReady = ArrayDeque<Bitmap>()
 
-    /** 退休一张位图进入冷却期 (从 stage0 开始)。 */
-    fun retireToCooling(b: Bitmap) {
-        if (!b.isRecycled) {
-            spareCoolingStage0.add(b)
-        }
+    fun retainUnpublished(b: Bitmap) {
+        if (!b.isRecycled && spareReady.size < SPARE_CAP) spareReady.addLast(b)
+    }
+
+    fun publishFrame(frame: PublishedTiles) {
+        published = frame
     }
 
     // 瓦片渲染重试连续失败计数 (用于熔断防护，避免 OOM 期间全速空转烧 CPU)
-    var consecutiveRetryFailures = 0
+    val recovery = DisplayTileRecovery()
 
     // 网格每帧复用的一次性缓冲 (热路径零分配)。
-    var needsFullWrite = BooleanArray(0)
-        private set
+    val needsFullWrite: BooleanArray get() = recovery.pending
     var touched = BooleanArray(0)
         private set
     var hitList = IntArray(0)
@@ -136,14 +100,11 @@ internal class DisplayTileState {
     fun beginStaging(grid: DisplayTileGrid, tiles: AtomicReferenceArray<Bitmap?>) {
         val count = grid.tileCount
         staging = PublishedTiles(grid, tiles)
-        needsFullWrite = BooleanArray(count) { true }
+        recovery.reset(count)
         touched = BooleanArray(count)
         hitList = IntArray(count)
         hitScratch = IntArray(2 * count)
         spareReady.clear()
-        spareCoolingStage0.clear()
-        spareCoolingStage1.clear()
-        spareCoolingStage2.clear()
     }
 
     /** 渲染线程: 暂存网格的像素全部写好, 发布给 onDraw。 */
@@ -162,37 +123,13 @@ internal class DisplayTileState {
     fun clear() {
         published = null
         staging = null
-        needsFullWrite = BooleanArray(0)
+        recovery.reset(0)
         touched = BooleanArray(0)
         hitList = IntArray(0)
         hitScratch = IntArray(0)
         spareReady.clear()
-        spareCoolingStage0.clear()
-        spareCoolingStage1.clear()
-        spareCoolingStage2.clear()
         snapshots[0] = null
         snapshots[1] = null
-        consecutiveRetryFailures = 0
-    }
-
-    /** 渲染线程: 每帧开头推移多帧冷却阶段，最老的 stage2 晋升进入 spareReady。 */
-    fun promoteCooledSpares() {
-        if (!spareCoolingStage2.isEmpty()) {
-            for (b in spareCoolingStage2) {
-                if (spareReady.size < SPARE_CAP && !b.isRecycled) {
-                    spareReady.addLast(b)
-                }
-            }
-            spareCoolingStage2.clear()
-        }
-        if (!spareCoolingStage1.isEmpty()) {
-            spareCoolingStage2.addAll(spareCoolingStage1)
-            spareCoolingStage1.clear()
-        }
-        if (!spareCoolingStage0.isEmpty()) {
-            spareCoolingStage1.addAll(spareCoolingStage0)
-            spareCoolingStage0.clear()
-        }
     }
 
     /** 渲染线程: 从后备池取一张尺寸匹配的位图; 池里没有就新分配 (OOM 返回 null)。 */

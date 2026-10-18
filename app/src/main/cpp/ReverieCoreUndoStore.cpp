@@ -3,6 +3,7 @@
  */
 
 #include "ReverieCoreUndoStore.h"
+#include "ReverieCrashHandler.h"
 
 #include <kundo2stack.h>
 
@@ -54,6 +55,10 @@ void ReverieUndoStore::purgeRedoState()
 void ReverieUndoStore::undo()
 {
     if (m_undoStack && m_undoStack->canUndo()) {
+        const int index = m_undoStack->index();
+        const QByteArray message = QStringLiteral("undo index=%1/%2 command=%3")
+            .arg(index).arg(m_undoStack->count()).arg(m_undoStack->text(index - 1)).toUtf8();
+        reverie_crash_handler_add_breadcrumb("HistoryNative", message.constData());
         m_undoStack->undo();
     }
 }
@@ -61,6 +66,10 @@ void ReverieUndoStore::undo()
 void ReverieUndoStore::redo()
 {
     if (m_undoStack && m_undoStack->canRedo()) {
+        const int index = m_undoStack->index();
+        const QByteArray message = QStringLiteral("redo index=%1/%2 command=%3")
+            .arg(index).arg(m_undoStack->count()).arg(m_undoStack->text(index)).toUtf8();
+        reverie_crash_handler_add_breadcrumb("HistoryNative", message.constData());
         m_undoStack->redo();
     }
 }

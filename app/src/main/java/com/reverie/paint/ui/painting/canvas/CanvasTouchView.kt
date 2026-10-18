@@ -2671,8 +2671,6 @@ class CanvasTouchView(context: Context) : View(context) {
             val idx = grid.tileIndex(tx, ty)
             val tile = tiles.tiles.get(idx) ?: continue
             if (tile.isRecycled) continue
-            // 交给 HWUI 之前登记: 之后渲染线程不再就地写这张位图 (见 PublishedTiles.drawnByView)。
-            tiles.markDrawn(idx)
             // 过滤开着时不能直接 drawBitmap: 边上会采到瓦片外的透明, 棋盘格透成网格。
             clampedTiles.draw(
                 canvas,
@@ -2735,8 +2733,8 @@ class CanvasTouchView(context: Context) : View(context) {
                     releaseLargeBitmapTiles()
                 }
                 drawDisplayTiles(canvas, tiles)
-                // 液化上屏用的整图快照 (只在液化等待上屏/参考窗口开着时才存在)
-                v.displayBitmap?.let { v.onLiquifyBitmapDrawn(it) }
+                // Acknowledge the exact immutable frame consumed above.
+                v.onLiquifyTilesDrawn(tiles)
             } else if (bmp != null) {
                 clampedTiles.clear()
                 if (LargeBitmapTilingPolicy.isLargeBitmap(bmp.byteCount.toLong())) {

@@ -9,6 +9,7 @@
  * ============================================================ */
 #include "ReverieCoreInternal.h"
 #include "ReverieCoreUndoStore.h"
+#include "ReverieCrashHandler.h"
 #include <strokes/KisMaskingBrushRenderer.h>
 #include <strokes/KisMaskedFreehandStrokePainter.h>
 #include <KisFreehandStrokeInfo.h>
@@ -1168,12 +1169,22 @@ bool ReverieCore::canRedo() const
 
 void ReverieCore::undo()
 {
+    // A liquid gesture holds live per-device transactions across engine tasks.
+    // Do not restore history underneath those transactions or force-commit here:
+    // pushing a new command would discard the redo branch.
+    if (m_liquifyTxnActive) {
+        reverie_crash_handler_add_breadcrumb("HistoryNative", "Undo blocked: liquify transaction open");
+        return;
+    }
     if (m_strokeBatchOpen) {
         touchStrokeCancel();
     }
     if (!m_undoStore || !m_document || !canUndo()) {
         return;
     }
+
+    // Handler serialization does not join Krita's asynchronous projection jobs.
+    m_document->waitForDone();
 
     QVector<KisNode *> oldNodes;
     oldNodes.reserve(m_layers.size());
@@ -1240,12 +1251,22 @@ void ReverieCore::undo()
 
 void ReverieCore::redo()
 {
+    // A liquid gesture holds live per-device transactions across engine tasks.
+    // Do not restore history underneath those transactions or force-commit here:
+    // pushing a new command would discard the redo branch.
+    if (m_liquifyTxnActive) {
+        reverie_crash_handler_add_breadcrumb("HistoryNative", "Redo blocked: liquify transaction open");
+        return;
+    }
     if (m_strokeBatchOpen) {
         touchStrokeCancel();
     }
     if (!m_undoStore || !m_document || !canRedo()) {
         return;
     }
+
+    // Handler serialization does not join Krita's asynchronous projection jobs.
+    m_document->waitForDone();
 
     QVector<KisNode *> oldNodes;
     oldNodes.reserve(m_layers.size());

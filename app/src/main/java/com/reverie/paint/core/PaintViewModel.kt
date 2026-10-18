@@ -296,6 +296,7 @@ class PaintViewModel : ViewModel() {
      */
     @Volatile
     internal var liquifyMaterializePending: Boolean = false
+    internal val liquifyMaterializeGate = com.reverie.paint.model.LiquifyMaterializeGate()
 
     fun updateLiquifyCoalesceSteps(steps: Int) {
         liquifyCoalesceSteps = steps
@@ -5455,11 +5456,15 @@ class PaintViewModel : ViewModel() {
     }
 
     @Volatile internal var liquifyPresentationGesture = 0L
-    internal val liquifyPresentation = com.reverie.paint.model.LiquifyPresentationFence<Bitmap>()
+    internal val liquifyPresentation = com.reverie.paint.model.LiquifyPresentationFence<Any>()
 
     internal fun onLiquifyBitmapDrawn(bitmap: Bitmap) {
         if (!liquifyPresentation.isPending(liquifyPresentationGesture)) return
         if (liquifyPresentation.consume(liquifyPresentationGesture, bitmap)) LiquifyGpuPreview.clear()
+    }
+
+    internal fun onLiquifyTilesDrawn(frame: PublishedTiles) {
+        if (liquifyPresentation.consume(liquifyPresentationGesture, frame)) LiquifyGpuPreview.clear()
     }
 
     internal var renderDeferCount = 0
