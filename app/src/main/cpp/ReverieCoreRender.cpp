@@ -340,24 +340,18 @@ bool ReverieCore::renderToBuffer(quint8 *buffer, int w, int h, bool forceFull)
         proj = compositeSoloProjection();
     } else {
         proj = image->projection();
-        // If Krita's async merger just ran to completion (gate.waitForMerger), the projection device is already
-        // fully composited by Krita's native merger and clean. We do NOT need to re-clear and re-composite.
-        // Fast synchronous compositeLayersRange is used when the background scheduler is idle:
-        // 1) Active in-stroke drawing (m_drawing)
-        // 2) Visible stroke layers requiring real-time stroke synchronization
-        // 3) Pen-up final stroke completion or direct slider drag previews (!m_dirtyRect.isEmpty())
-        if (!gate.waitForMerger) {
-            bool hasSpecialCompositeLayer = false;
-            for (const LayerEntry &le : m_layers) {
-                if (le.visible && (le.isStrokeLayer || le.nodeType == NodeTypeStroke || le.nodeType == NodeTypeTransparencyMask)) {
-                    hasSpecialCompositeLayer = true;
-                    break;
-                }
+        // 笔画脏区只进 markStrokeDirty，不进 Krita 的 setDirty，等完合并器之后仍要按当前脏区同步合成。
+        // compositeDirtyRegions 自己会先 clear 再合成，不会叠色。
+        bool hasSpecialCompositeLayer = false;
+        for (const LayerEntry &le : m_layers) {
+            if (le.visible && (le.isStrokeLayer || le.nodeType == NodeTypeStroke || le.nodeType == NodeTypeTransparencyMask)) {
+                hasSpecialCompositeLayer = true;
+                break;
             }
-            if (m_drawing || hasSpecialCompositeLayer || !m_dirtyRect.isEmpty()) {
-                // 逐块合成离散脏区, 不再先把几处笔迹并成一个大包围盒再整体合成。
-                compositeDirtyRegions(proj);
-            }
+        }
+        if (m_drawing || hasSpecialCompositeLayer || !m_dirtyRect.isEmpty()) {
+            // 逐块合成离散脏区, 不再先把几处笔迹并成一个大包围盒再整体合成。
+            compositeDirtyRegions(proj);
         }
     }
     if (!proj) {
@@ -537,18 +531,18 @@ int ReverieCore::beginTileFrame(QRect *outRects, int cap)
         proj = compositeSoloProjection();
     } else {
         proj = image->projection();
-        if (!gate.waitForMerger) {
-            bool hasSpecialCompositeLayer = false;
-            for (const LayerEntry &le : m_layers) {
-                if (le.visible && (le.isStrokeLayer || le.nodeType == NodeTypeStroke ||
-                                   le.nodeType == NodeTypeTransparencyMask)) {
-                    hasSpecialCompositeLayer = true;
-                    break;
-                }
+        // 笔画脏区只进 markStrokeDirty，不进 Krita 的 setDirty，等完合并器之后仍要按当前脏区同步合成。
+        // compositeDirtyRegions 自己会先 clear 再合成，不会叠色。
+        bool hasSpecialCompositeLayer = false;
+        for (const LayerEntry &le : m_layers) {
+            if (le.visible && (le.isStrokeLayer || le.nodeType == NodeTypeStroke ||
+                               le.nodeType == NodeTypeTransparencyMask)) {
+                hasSpecialCompositeLayer = true;
+                break;
             }
-            if (m_drawing || hasSpecialCompositeLayer || !m_dirtyRect.isEmpty()) {
-                compositeDirtyRegions(proj);
-            }
+        }
+        if (m_drawing || hasSpecialCompositeLayer || !m_dirtyRect.isEmpty()) {
+            compositeDirtyRegions(proj);
         }
     }
     if (!proj) {
