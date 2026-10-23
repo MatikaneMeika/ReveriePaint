@@ -62,3 +62,23 @@ debug 版 `FbGeomLog.strokeBegin` 每次落笔多打一行 `ev=stroke_ready`（r
 - `stable`：几何连续稳定的帧数；
 - `ready`：门控结果；
 - `cond`：每一项条件是否满足。
+
+## 实施补记 (L-01/L-02/L-03 落地, 2026-10-23)
+
+### 与辅助线面板改动的兼容
+1. 参考线可见性只看 `guide.mode != OFF`, 不看 `assistedDrawing`; 前缓冲重放的参考线
+   与 `CanvasGuidesOverlay` 共用 `CanvasDecorGeometry` 判定。单测:
+   `CanvasDecorGeometryTest` 覆盖 perspective3d + assistedDrawing=false ⇒ 可见。
+2. 辅助线面板 (Tool.DRAWING_GUIDE + QuickShapeCollapsibleDrawer) 打开时经
+   `overlayPanelsOpen` (含 drawingGuidePanelOpen) 让 wantsHold=false, 不走前缓冲,
+   因此无需 UiPanelSlot 避让。若以后把该面板移出 `overlayPanelsOpen`, 必须改为注册
+   UiPanelSlot 进入 clipOutUi, 否则前缓冲会盖住面板。
+3. QuickShape 在笔画进行中不画预览 (只有 TOP_HUD_TOAST 提示), 不在重放范围内;
+   `beginQuickShape` (UP 处理) 未改动。
+
+### 落地差异
+- 门控信号中 render idle (renderScheduled / follow-up / in-flight) 与刷新率
+  (display.refreshRate ≥ 最高模式 − 5Hz) 为推断信号, 日志 `inferred=[idle,hz]` 标注。
+- 工程加载路径的“进画布时刻”为加载结束时刻 (静默窗起点)。
+- 开关: `debug.reverie.fb_decor` / `debug.reverie.fb_ready_gate` (默认 1, 进程内只读一次)。
+- 未测量: Picture 录制耗时、GL 线程向 sc 软件 drawPicture 的耗时; 需真机 trace。
