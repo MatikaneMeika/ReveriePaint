@@ -66,15 +66,29 @@
 不改 native、不加 `-PbuildNative`; 不碰 beginQuickShape/touchEnd 与 DrawingGuidePanel;
 新文件带 SPDX 头; 纯逻辑单测; 小步提交、每步推 fork。
 
-## Implementation status (2026-10-23, round 2)
+## Implementation status (2026-10-23, round 3)
 
 - HoleMaskGrid cell = 8 px, margin = 2 px (`debug.reverie.fb_hole_margin`), coverage cap 35 % (`debug.reverie.fb_hole_max_cov`).
 - Arm → NORMAL (stroke not held) only when: mask stale/not built yet, coverage > cap, or tool not BRUSH/ERASER/SMUDGE.
-  **Snap lines (perspective 2D / isometric / 2D grid) are now held** (`4b630b51`, 1a): the front draws the guide after
-  the ink blit through `DST_OUT` with the hole mask (FrontBufferPreviewOverlay `drawGuide` :1129), never into the backup
-  layer; the old footprint is erased by a SRC restore from the backup (`erasePrevGuide` :1146). The window draws the
-  guide only inside UI clips ∪ holes (DST_IN) and invalidates prev∪cur footprint ∩ (holes ∪ clips)
-  (`model/DynamicGuideFootprint.kt`).
+  **Snap lines (perspective 2D / isometric / 2D grid): default = NORMAL path again (strict identity)** — round 3
+  gates 1a (`4b630b51`) behind `debug.reverie.fb_snap_hold` (default 0; `FrontBufferFeatureFlags.snapHold`,
+  `FrontBufferHolePolicy.snapForcesNormal`). With it off nothing of 1a runs: no extras backup for snap strokes, no guide
+  in front packets (`frontDrawsGuide`), window draws the full guide (`windowGuideHolesOnly` = false) — byte-for-byte the
+  pre-1a behaviour.
+  **Why default off:** the held guide cannot be *proven* identical. The front uses the same `DynamicGuidePainter.drawWith`
+  geometry, same Paint construction (separate instance for thread safety) and identity screen matrix, so AA coverage is the
+  same Skia/HWUI algorithm — but (a) the masked paint gets its colour from a constant LinearGradient shader + ComposeShader
+  DST_OUT instead of the paint colour (gradient/dither path may differ), (b) front pixels are semi-transparent
+  premultiplied 8-bit composited by SurfaceFlinger/HWC vs blended directly in the window (±1 rounding), (c) the two
+  surfaces present on independent cadences, so pen-up / E-handback can't be made atomic (≤ 1 frame linger, gap or stale
+  position).
+  With `fb_snap_hold=1` (A/B only): front draws the guide after the ink blit through `DST_OUT` with the hole mask
+  (FrontBufferPreviewOverlay `drawGuide`), erases the old footprint by SRC restore from the backup (`erasePrevGuide`).
+  Round 3 ordering fix: while the front guide is on screen (`FrontBufferPreviewOverlay.guideOnScreen`) the window draws
+  the guide holes/clips only *even after release*, so the two surfaces never draw the same guide pixel (no E-mode alpha
+  doubling); when the front erases it (clear / `invalidatePrevOverlay` / guide-less packet / renderer release) and the
+  stroke isn't held, `RealInkController.onFrontGuideCleared` posts a window redraw with the full guide
+  (`guideClearedNeedsRedraw`). Residual in ON mode: ≤ 1 frame gap/stale guide outside holes at handback/pen-up.
 - **First stroke after pan/zoom** (`46c8eb4a`, 1b): the first stale frame after ≥ 50 ms quiet with no fit/snap animator
   running (CanvasTouchView :2863) rebuilds the mask immediately instead of waiting the 100 ms debounce
   (`FrontBufferHolePolicy.buildImmediately`). Rasterisation stays on the `reverie-holes` thread; a pen-down that lands
@@ -114,8 +128,11 @@ Compare each with low latency off (screenshots / slow-mo). Debug APK: `adb shell
 `ev=hole_arm ... arm=` shows held vs fallback per stroke, `ev=identity_mismatch` must never appear.
 
 1. Plain brush / eraser / smudge with symmetry guides, selection ants, pixel-grid off: held, no flicker over decor.
-2. Snap modes held (new): perspective 2D, isometric, 2D grid — guide shown during the stroke, looks the same as off.
-   Known: guide lingers ~1 frame after pen-up; in E mode guide alpha may double for 1–2 frames.
+2. Snap modes (perspective 2D, isometric, 2D grid), default: stroke falls back to the normal path (`ev=hole_arm` NORMAL)
+   — must look identical to low latency off, no linger, no doubling.
+   A/B: `adb shell setprop debug.reverie.fb_snap_hold 1` (restart app): stroke held, guide drawn by the front. Check
+   pen-up and E mode (`fb_hole_mode e`): no alpha doubling; known residual ≤ 1 frame guide gap/stale position outside
+   holes, ±1 colour rounding. Compare perceived latency ON vs OFF to decide whether ON is worth it.
 3. Perspective 3D: window shows no cursor while the held stroke shows the front cursor (ABORT_FRAME quirk) — check it is
    acceptable / no stale cursor left behind.
 4. First stroke right after pan / pinch-zoom / rotate (lift, wait ~0.1 s, draw): should be held (`ev=hole_arm` not a stale fallback).
