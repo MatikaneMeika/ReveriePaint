@@ -2905,5 +2905,10 @@
     <string name="shading_assist_color_edge_snap_tol">Snap Tolerance</string>
     <string name="shading_assist_morphological_smooth">Cel Smoothing</string>
     <string name="shading_assist_ambient_occlusion">Crevice AO</string>
+    <string name="brush_gate_mypaint">Not supported by MyPaint brushes (.myb)</string>
+    <string name="brush_gate_colorsmudge_only">Only affects Color Smudge (colorsmudge) brushes; this brush engine ignores it</string>
+    <string name="brush_gate_no_brush_def">This brush engine has no tip definition; this setting has no effect</string>
+    <string name="brush_gate_auto_tip_only">Not supported by image tips (parametric tips only)</string>
+    <string name="brush_possibly_modified_hint">The original file of this brush may have been modified by an older version; reset returns to its state at migration.</string>
 </resources>
 
