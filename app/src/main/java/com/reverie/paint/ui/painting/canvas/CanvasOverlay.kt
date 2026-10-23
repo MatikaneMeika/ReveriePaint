@@ -182,8 +182,8 @@ internal fun CanvasOverlay(
         val animFraction = if (hasActiveSelection) selAnimFraction.value else 0f
 
         val bmp = object {
-            val width: Int = if (vm.renderW > 0) vm.renderW else vm.docWidth
-            val height: Int = if (vm.renderH > 0) vm.renderH else vm.docHeight
+            val width: Int = CanvasDecorGeometry.overlayBitmapSize(vm.renderW, vm.docWidth)
+            val height: Int = CanvasDecorGeometry.overlayBitmapSize(vm.renderH, vm.docHeight)
         }
         val imgW = bmp.width.toFloat()
         val imgH = bmp.height.toFloat()
@@ -1186,37 +1186,16 @@ internal fun CanvasOverlay(
                 }
 
                 // 2. 选区边界动态黑白交替流动蚂蚁线：无论在选区工具内还是切到其他工具（画笔、橡皮擦等），只要存在活动选区，选区边缘均显示动态流动的黑白相间蚂蚁线
-                val shouldShowOutline = !isTransform && vm.hasSelection && (!isSelecting || vm.selectionMode != 0)
+                val shouldShowOutline = CanvasDecorGeometry.selectionOutlineVisible(
+                    hasSelection = vm.hasSelection,
+                    isTransform = isTransform,
+                    isSelecting = isSelecting,
+                    selectionMode = vm.selectionMode,
+                )
                 if (shouldShowOutline) {
                     vm.selectionOutlinePath?.let { outlinePath ->
                         val currentScale = (zoom.value * fitScale).coerceAtLeast(0.001f)
-                        val strokeW = 1.0.dp.toPx() / currentScale
-                        val blackStrokeW = 1.4.dp.toPx() / currentScale
-                        val dashInterval = 3.5.dp.toPx() / currentScale
-                        val antPhase = animFraction * (dashInterval * 2)
-
-                        drawPath(
-                            path = outlinePath,
-                            color = Color.Black.copy(alpha = 0.85f),
-                            style = androidx.compose.ui.graphics.drawscope.Stroke(
-                                width = blackStrokeW,
-                                pathEffect = androidx.compose.ui.graphics.PathEffect.dashPathEffect(
-                                    floatArrayOf(dashInterval, dashInterval),
-                                    phase = antPhase
-                                )
-                            )
-                        )
-                        drawPath(
-                            path = outlinePath,
-                            color = Color.White,
-                            style = androidx.compose.ui.graphics.drawscope.Stroke(
-                                width = strokeW,
-                                pathEffect = androidx.compose.ui.graphics.PathEffect.dashPathEffect(
-                                    floatArrayOf(dashInterval, dashInterval),
-                                    phase = antPhase + dashInterval
-                                )
-                            )
-                        )
+                        with(CanvasDecorDraw) { drawSelectionAnts(outlinePath, currentScale, animFraction) }
                     }
                 }
 
