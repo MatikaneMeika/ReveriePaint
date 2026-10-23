@@ -66,13 +66,61 @@
 不改 native、不加 `-PbuildNative`; 不碰 beginQuickShape/touchEnd 与 DrawingGuidePanel;
 新文件带 SPDX 头; 纯逻辑单测; 小步提交、每步推 fork。
 
-## Implementation status (2026-10-23)
+## Implementation status (2026-10-23, round 2)
 
 - HoleMaskGrid cell = 8 px, margin = 2 px (`debug.reverie.fb_hole_margin`), coverage cap 35 % (`debug.reverie.fb_hole_max_cov`).
-- Arm → NORMAL (stroke not held) when: mask stale/not built yet, coverage > cap, tool not BRUSH/ERASER/SMUDGE,
-  or assisted-drawing snap lines possible (perspective 2D / isometric / 2D grid). Degraded by design.
+- Arm → NORMAL (stroke not held) only when: mask stale/not built yet, coverage > cap, or tool not BRUSH/ERASER/SMUDGE.
+  **Snap lines (perspective 2D / isometric / 2D grid) are now held** (`4b630b51`, 1a): the front draws the guide after
+  the ink blit through `DST_OUT` with the hole mask (FrontBufferPreviewOverlay `drawGuide` :1129), never into the backup
+  layer; the old footprint is erased by a SRC restore from the backup (`erasePrevGuide` :1146). The window draws the
+  guide only inside UI clips ∪ holes (DST_IN) and invalidates prev∪cur footprint ∩ (holes ∪ clips)
+  (`model/DynamicGuideFootprint.kt`).
+- **First stroke after pan/zoom** (`46c8eb4a`, 1b): the first stale frame after ≥ 50 ms quiet with no fit/snap animator
+  running (CanvasTouchView :2863) rebuilds the mask immediately instead of waiting the 100 ms debounce
+  (`FrontBufferHolePolicy.buildImmediately`). Rasterisation stays on the `reverie-holes` thread; a pen-down that lands
+  before the rebuild finishes still falls back for that one stroke.
+- **Coverage > 35 % stays a fallback (1c, justified, no code)**: the dominant case is the pixel grid
+  (CanvasTouchView `drawPixelGrid` :3987, non-AA, 1/scale stroke): dilated by margin 2 it covers ~5/s of each axis, so every
+  packet would hit, and the grid already disables partial invalidation (:4278). H-min there = normal full window redraw
+  + front work, strictly more than the fallback. Front-composing the grid (SRC_ATOP) is not guaranteed identical
+  (non-AA tie pixels, matrix/offset rounding, erase-restore from a backup that has no grid).
+- **Tile COW delta** (`f28bd406`): a COW tile write prefers a spare that is the same tile's own retired bitmap
+  (`DisplayTileState.obtainSpare` :237) and copies only the union of boxes written since that version
+  (`model/TileDeltaLedger.kt`, K = 8; PaintViewModelTiles :146), instead of the whole 512² tile (1 MiB). History gaps,
+  failed writes, grid switches → full copy (conservative; pixel-identical by construction, randomized test).
+  Also benefits the normal path (every drawn tile COWs on its next write).
 - Hit rects: single-pass `ComposeShader(ink, mask, DST_OUT)` SRC blit (front + backup layer); non-hit rects unchanged.
-- Window invalidate: one `postInvalidateOnAnimation(union(clip overlap, hit rects))` per packet, after front submit.
+- Window invalidate: one `postInvalidateOnAnimation(union(clip overlap, hit rects))` per packet, after front submit
+  (RealInkController :575–618).
 - Cursor: shared HoldCursorPainter; front saveLayer + DST_OUT, window saveLayer + DST_IN; strict mode (default) drops predicted tip.
 - E mode (`debug.reverie.fb_hole_mode=e`): first hit hands the stroke back to the normal path.
-- Not done: tile delta COW, sub-rect texture upload (whole-bitmap upload remains), GLFrontBufferedRenderer (not evaluated in code).
+
+### Remaining per-hit costs (by code; no device numbers yet)
+
+- Window re-record + full view redraw: on SDK 31 HWUI ignores the `invalidate(rect)` dirty rect, so every hit frame
+  re-records `onDraw` (:2586) and redraws the whole view node. Splitting into a patch view / RenderNode is too invasive now.
+- Tile DRAWN churn: `drawDisplayTiles` marks every visible tile DRAWN (:2774), so the next write of each forces COW
+  (now delta copy) + a whole-tile texture upload (HWUI uploads per bitmap; no sub-rect upload without native).
+  Resetting to UNDRAWN needs a "HWUI finished reading" signal — not done (unsafe without it).
+- Backup-layer restore for guide/cursor erase (FrontBufferPreviewOverlay :1111 / :1146) = full CPU-bitmap upload per
+  changed packet. Bake-based erase deferred (packet drops make the drawn state ambiguous).
+- Render merger: `scheduleRender` already dedupes to one pending render (PaintViewModel :5804); no waste found.
+- Not done: sub-rect texture upload, GLFrontBufferedRenderer (not evaluated in code).
+
+## Device checklist (HONOR HEY-W09, Android 12 / SDK 31)
+
+Compare each with low latency off (screenshots / slow-mo). Debug APK: `adb shell setprop debug.reverie.perf 1`,
+`adb shell setprop debug.reverie.fb_identity_check 1` (restart app), then `adb logcat -s FbGeomLog`:
+`ev=hole_arm ... arm=` shows held vs fallback per stroke, `ev=identity_mismatch` must never appear.
+
+1. Plain brush / eraser / smudge with symmetry guides, selection ants, pixel-grid off: held, no flicker over decor.
+2. Snap modes held (new): perspective 2D, isometric, 2D grid — guide shown during the stroke, looks the same as off.
+   Known: guide lingers ~1 frame after pen-up; in E mode guide alpha may double for 1–2 frames.
+3. Perspective 3D: window shows no cursor while the held stroke shows the front cursor (ABORT_FRAME quirk) — check it is
+   acceptable / no stale cursor left behind.
+4. First stroke right after pan / pinch-zoom / rotate (lift, wait ~0.1 s, draw): should be held (`ev=hole_arm` not a stale fallback).
+   Drawing immediately (< 50 ms) may still fall back for that stroke — expected.
+5. Pixel grid on (zoom ≥ 4×): falls back by design (coverage > 35 %); verify no visual difference and no added lag.
+6. Long fast strokes across tile boundaries (incl. normal path, low latency off): no tile seams / stale pixels / old
+   content flashes (COW delta). Also after undo/redo, layer toggle, document switch, canvas resize.
+7. Latency/perf not worse than `d4281479` APK: same scene, compare perceived lag and `FbGeomLog` hit-frame timings.
