@@ -65,3 +65,14 @@
 
 不改 native、不加 `-PbuildNative`; 不碰 beginQuickShape/touchEnd 与 DrawingGuidePanel;
 新文件带 SPDX 头; 纯逻辑单测; 小步提交、每步推 fork。
+
+## Implementation status (2026-10-23)
+
+- HoleMaskGrid cell = 8 px, margin = 2 px (`debug.reverie.fb_hole_margin`), coverage cap 35 % (`debug.reverie.fb_hole_max_cov`).
+- Arm → NORMAL (stroke not held) when: mask stale/not built yet, coverage > cap, tool not BRUSH/ERASER/SMUDGE,
+  or assisted-drawing snap lines possible (perspective 2D / isometric / 2D grid). Degraded by design.
+- Hit rects: single-pass `ComposeShader(ink, mask, DST_OUT)` SRC blit (front + backup layer); non-hit rects unchanged.
+- Window invalidate: one `postInvalidateOnAnimation(union(clip overlap, hit rects))` per packet, after front submit.
+- Cursor: shared HoldCursorPainter; front saveLayer + DST_OUT, window saveLayer + DST_IN; strict mode (default) drops predicted tip.
+- E mode (`debug.reverie.fb_hole_mode=e`): first hit hands the stroke back to the normal path.
+- Not done: tile delta COW, sub-rect texture upload (whole-bitmap upload remains), GLFrontBufferedRenderer (not evaluated in code).
