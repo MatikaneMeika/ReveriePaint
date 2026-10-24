@@ -202,3 +202,29 @@ Compare each with low latency off (screenshots / slow-mo). Debug APK: `adb shell
 每包: 墨脏区烘焙 (与 H-min 相同) + 足迹块烘焙 (仅光标/导引线变化时; 光标 ~2r+4 方块 × 对称数) +
 两段 Picture 在矩形并集内重放 (被 clip 掉的绘制只做裁剪测试)。无每命中窗口重绘, 无掩码重建。
 真机用 `hole_end` 的 `bake=avg/max` 与 hmin 的命中帧耗时对比; 若 compose 更慢, 用 `fb_hole_mode=hmin` 回退。
+
+## Round 5: compose 对称延迟 (足迹合并)
+
+**执行前声明**: 上游 `beb49026` 未变 (merge-base `80be2910`); fork 基线 `f2942769`; 本轮起点 `6b7d300c` (compose 默认)。
+真机 SM_X710 `arm=COMPOSE` 证据: `foot≈4/包` (旧+新光标 × 主+1 对称)、`bake≈453µs`、`pending=2 baked=2`。
+相对隔壁 ready-gate 纯贴墨, 多出的是每包光标足迹重烤。
+
+### 去掉的工作 (file:line)
+
+1. **按 tip 并新旧光标足迹** (`FrontBufferCompose.appendCursorTransitionBoxes`, `RealInkController.presentCompose` ~:782):
+   1 对称时 2 块而非分别 append 的 4 块; 并集覆盖新旧全部像素 → 恒等。
+2. **丢掉已被墨脏区包含的足迹** (`dropContainedAfter` ~:798): 尖端光标常落在镜像脏区内 → foot→0。
+3. **与墨相交的足迹并进墨块** (`absorbOverlappingAfter` ~:799): 少一次独立 `bakeRect`; 墨块撑大后全部按屏幕反算源。
+4. **光标 half+2 → half+1** (~:784): `HoldCursorPainter.half` 已含 +2, 环 2.2px AA 只需再 +1。
+5. **吸收后烘焙容忍无瓦片边距** (presentCompose bake 循环): 只要求墨前缀至少一块画到瓦片, 避免撑大后误失败。
+
+### 预期 (按代码, 非编造真机数)
+
+- 对称运笔且光标落在 dab 脏区上: `foot` 从 ~4/包 → ~0/包, `bakePx` 接近纯墨两块, bake 均值应明显低于 453µs, `pending` 回 0–1。
+- 细笔光标大于 dab: foot 保留 1–2 块 (并合后), 仍少于旧的 4。
+- 静态辅助线仍每包在脏区 `drawPicture` (SRC 贴墨会盖住线, 必须重画才能恒等); 此项不是本轮目标。
+
+### A/B
+
+- 默认 compose。`adb shell setprop debug.reverie.fb_hole_mode hmin` 回挖孔; 与隔壁 ready-gate 包比对称手感。
+- `adb shell setprop debug.reverie.perf 1` 后看 `ev=hole_end ... compose=… foot=… bake=…`。
