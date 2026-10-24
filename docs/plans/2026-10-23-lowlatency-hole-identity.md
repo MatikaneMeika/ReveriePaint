@@ -228,3 +228,23 @@ Compare each with low latency off (screenshots / slow-mo). Debug APK: `adb shell
 
 - 默认 compose。`adb shell setprop debug.reverie.fb_hole_mode hmin` 回挖孔; 与隔壁 ready-gate 包比对称手感。
 - `adb shell setprop debug.reverie.perf 1` 后看 `ev=hole_end ... compose=… foot=… bake=…`。
+
+## Round 6 — 辅助面板开着整笔走普通模式 (2026-10-23)
+
+**根因 (file:line):**
+- `PaintingPage.kt:702-705` 把 `drawingGuidePanelOpen` 并进 `overlayPanelsOpen`。
+- `RealInkController.wantsHold()` (`RealInkController.kt:386`) 在 `overlayPanelsOpen` 时直接 `return false`,
+  随后 `presentTileFrame` 经 `RealInkHoldPolicy.shouldReleaseOnReject` 释放按住 → 整笔普通模式。
+- 辅助面板本身不是全屏模态, 却被当成"盖住前缓冲就必须交还"的 overlay; 关面板立刻恢复低延迟。
+- 次因: `DrawingGuidePanel` 从未 `reportUiSlot`, `UiPanelSlot` 无 GUIDE 槽; 即使按住成功,
+  `setZOrderOnTop(true)` 的前缓冲也会盖住面板 chrome (其它悬浮窗靠 `clipOutUi` 存活)。
+
+**修复:**
+- `RealInkHoldPolicy.overlayPanelsBlockHold(...)`: `drawingGuidePanelOpen` 故意不参与布尔或
+  (参数保留以免接线漏改); `PaintingPage` 改走该纯函数。
+- 新增 `UiPanelSlot.DRAWING_GUIDE_PANEL` (evadable); `DrawingGuidePanel` 接 `reportUiSlot` +
+  `evadablePanelSurface` / `evadablePanelContent`, 与其它悬浮窗同一孔径/避让路径。
+- 不开静默窗、不强制 `held=false`、不增加按住路径工作量。
+
+**验证:** `RealInkHoldPolicyTest` (辅助面板单独不挡按住) + `UiPanelOcclusionTrackerTest` COUNT=22。
+
