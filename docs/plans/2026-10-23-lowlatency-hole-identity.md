@@ -141,3 +141,64 @@ Compare each with low latency off (screenshots / slow-mo). Debug APK: `adb shell
 6. Long fast strokes across tile boundaries (incl. normal path, low latency off): no tile seams / stale pixels / old
    content flashes (COW delta). Also after undo/redo, layer toggle, document switch, canvas resize.
 7. Latency/perf not worse than `d4281479` APK: same scene, compare perceived lag and `FbGeomLog` hit-frame timings.
+
+## Round 4: compose — 覆盖层画进前缓冲 (默认), H-min 留作 A/B
+
+**执行前声明**: 基于 `45b3006d` (974 测试全过) → `08816939` (纯几何 `model/FrontBufferCompose.kt` + 策略) 继续,
+不重来; 不改 native、不碰 beginQuickShape/touchEnd 与 DrawingGuidePanel; 新提交只加在本分支, 不强推。
+钉死: 上游 `beb49026`, fork 基线 `f2942769`, 本轮起点 `08816939`。
+
+### 设计
+
+前缓冲不再挖孔。每包在"墨脏区 ∪ 覆盖层旧/新足迹"的矩形并集 (≤ `FrontBufferCompose.MAX_PACKET_RECTS`) 内:
+烘焙瓦片 (SRC 棋盘格 + 瓦片, 与窗口同一路径) → 按窗口同一顺序、同一函数/画笔/矩阵重画覆盖层:
+像素网格 (`under` Picture) → 动态导引线 (`DynamicGuidePainter`) → 光标 (`HoldCursorPainter.drawAll`) →
+绘图辅助线 (`over` Picture)。被覆盖的旧足迹由同一次烘焙"恢复", 不需要备份层。
+窗口在按住期间照常冻结, 前缓冲每个像素 = 关低延迟时窗口该像素。
+
+- 静态覆盖层 (`FrontBufferDecor` = under/over Picture + pose): 只在状态变化时重录
+  (CanvasTouchView `composeDecorFor` :3746, onDraw 空闲时预录 ~:2861)。
+- 动态覆盖层 (光标/导引线): 渲染线程台账 shown/base/next (RealInkController `presentCompose` :731);
+  上一包被回收则 shown 回退 base, 足迹 = 旧 ∪ 新, 不变则零额外工作。
+- 抬笔: `onStrokeCommitted` (:446) 在释放前补一包 `final=true` (覆盖层为空 ⇒ 清掉前缓冲上的光标/导引线,
+  该处恢复成烘焙内容), 之后沿用"窗口提交后清前缓冲"。
+- 验证: `debug.reverie.fb_identity_check 1` → `FbGeomLog.composeIdentityCheck`
+  (FrontBufferPreviewOverlay :1198): 文档内任一像素 α≠0xFF 记 `ev=identity_mismatch mode=compose`。
+- 统计: `ev=hole_end ... compose=包数 foot=足迹块数 bakePx slotPx bake=avg/max us`。
+- A/B: `adb shell setprop debug.reverie.fb_hole_mode hmin` (重启 app) 回到 H-min; `e` 为整笔交还。
+
+### 去掉的工作 (相对 H-min, 仅 compose 笔画)
+
+- 孔洞掩码的录制/栅格化/膨胀/积分图 (`holeMasks.scheduleIfStale` 跳过, CanvasTouchView onDraw ~:2861; armRealInkHold :3660 跳过 decideArm)。
+- 命中帧的窗口整视图重录重画 (`postInvalidateOnAnimation(hit)`): compose 只对 UI 遮挡区重叠失效, 与原来相同。
+- 覆盖率 >35% (像素网格) 的回退: 网格现由前缓冲 `under` 重放, 不再回退。
+- 吸附导引线 `fb_snap_hold` 回退: compose 下导引线由前缓冲画 (`windowGuideHolesOnly` 第 2 参, :3148)。
+- 备份层恢复 (旧光标/导引线擦除): 改由烘焙恢复 (`drawComposePacket` :1105 不再走 erasePrev*)。
+
+### 仍走 H-min 的情形 (不是 compose 的缺陷, 是两表面无法逐像素一致的情形)
+
+- 可见选区蚂蚁线 (`composeApplies` :3729/`antsVisible` :3737): 蚂蚁线随时间流动, 前缓冲与窗口无法锁相。
+- 旋转/镜像 (`FrontBufferCompose.isAxisAligned`, RealInkController :797): 窗口 GPU 双线性采样, CPU 烘焙复刻不出逐像素一致。
+- 非画笔/橡皮/涂抹工具 (:3731)。
+
+### 已知非恒等 (file:line)
+
+1. 文档外的覆盖层 (蚂蚁线外的 UI/辅助线超出画布部分): 前缓冲只合成到文档内 (`docInner`, :797),
+   文档外由 SurfaceFlinger 叠在冻结窗口上 —— 文档外窗口本就不变, 仅当覆盖层在文档外移动时有 1 帧滞后。
+2. 文档边缘半覆盖像素 (`docInnerRect` 向内取整): 边缘那一列像素不重放 under/over, 显示冻结窗口值。
+3. CPU 烘焙 vs GPU 采样 (缩放非整数倍时) — 早已存在, 与 H-min 相同。
+4. 光标领先/EMA 与窗口不同 — 早已存在。
+5. UI 遮挡区重叠处的双重绘制 — 早已存在。
+6. 导引线快照读到撕裂 (`guideSnapshot.read`, :777) → 该包按 NONE 处理, 下一包补上。
+7. 末包尽力而为 (:451): 槽位/内存失败时退回原来的抬笔清除, 1–2 帧内追上。
+8. 末包瓦片可能未含最后几笔 dab: 窗口随后追上 (与原抬笔一致)。
+9. 笔画中途位姿变化 → `handBack` (:749), 交还正常路径。
+10. 透明文档且无棋盘格画笔时烘焙为 CLEAR ⇒ 文档内透明, 恒等检查会报出 (应不出现; 若出现即为缺陷)。
+11. 缓冲尺寸变化清前缓冲 — 早已存在。
+12. 3D 透视辅助: 窗口第 2.5 段中止整帧, 光标不画; compose 下前缓冲同样不画 (`dynamicGuideAbortsFrame` :3758)。
+
+### 开销 (按代码, 尚无真机数字)
+
+每包: 墨脏区烘焙 (与 H-min 相同) + 足迹块烘焙 (仅光标/导引线变化时; 光标 ~2r+4 方块 × 对称数) +
+两段 Picture 在矩形并集内重放 (被 clip 掉的绘制只做裁剪测试)。无每命中窗口重绘, 无掩码重建。
+真机用 `hole_end` 的 `bake=avg/max` 与 hmin 的命中帧耗时对比; 若 compose 更慢, 用 `fb_hole_mode=hmin` 回退。
