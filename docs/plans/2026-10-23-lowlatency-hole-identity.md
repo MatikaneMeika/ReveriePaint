@@ -248,3 +248,65 @@ Compare each with low latency off (screenshots / slow-mo). Debug APK: `adb shell
 
 **验证:** `RealInkHoldPolicyTest` (辅助面板单独不挡按住) + `UiPanelOcclusionTrackerTest` COUNT=22。
 
+
+## Round 7 — 逼退低延迟的面板/弹窗改走 UiPanelSlot 孔径 (2026-10-23)
+
+### 执行前声明
+
+- 基线钉死 `7b1b5049` (本分支 Round 6)。2026-10-23 21:06 CDT 查上游: `origin/main` = `beb49026`,
+  比合并基 `80be2910` 多 14 个提交; 本轮不 rebase、不合并上游。
+- 远端异常 (只报告, 不做破坏性处理): Round 6 的 `7b1b5049` 被推到了 `origin` (上游 LanRhyme) 同名分支,
+  fork 同名分支仍在 `8c396873`。本轮显式 `git push fork HEAD:fix/lowlatency-hole-identity-20261023`
+  (从 8c396873 快进, 不强推); 上游那条分支是否删除由用户决定。
+- 判据: 面板开着时**画布能否收到落笔**。收不到 (全屏透明遮罩 `noRippleClickable(onClose)` 吃掉按下) 的,
+  这一笔不存在, 挡不挡按住对墨零影响, 且全屏遮罩无法登记成有限孔径 → 保留阻挡。收得到的一律登记
+  `UiPanelSlot`、不挡按住。按住热路径不加任何工作 (孔径快照仍只在 tracker 版本变化/DOWN/MOVE 重建一次)。
+
+### 逐项复判 (file:line @7b1b5049)
+
+| 面板/条件 | 位置 | 结论 | 理由 |
+|---|---|---|---|
+| 笔刷面板 (未钉住) | `BrushPanel.kt:1458-1463` 全屏 `noRippleClickable(onClose)` | 保留阻挡 | 遮罩吃掉画布按下, 无落笔 |
+| 笔刷面板 (钉住) | `BrushPanel.kt:1456-1457` `PINNED_BRUSH_PANEL` | 已是孔径 | — |
+| 图层面板 列表/详情 (未钉住) | `LayerPanel.kt:430-440` 遮罩 | 保留阻挡 | 同上 |
+| **图层面板 滤镜调节页 (未钉住)** | `LayerPanel.kt:432-433` 无 clickable 的透明 Box, 卡片未登记 | **改孔径** | 画布可落笔 (Compose 无 pointerInput 的 Box 不拦截), 却因 `layerPanelBlocking` 整笔退普通模式 |
+| 图层面板 (钉住) | `LayerPanel.kt:428` `PINNED_LAYER_PANEL` | 已是孔径 | — |
+| 色板 (未钉住/钉住) | `ColorPanel.kt:258-264` 遮罩 / `:256` `PINNED_COLOR_PANEL` | 保留阻挡 / 已是孔径 | 同上 |
+| 设置面板 | `SettingsPanel.kt:105-109` 遮罩 | 保留阻挡 | 同上 |
+| 更多工具 | `AllToolsPanel.kt:72-76` 遮罩 | 保留阻挡 | 同上 |
+| 绘图辅助面板 | Round 6 已改 `DRAWING_GUIDE_PANEL` | 已是孔径 | — |
+| Dialog/AlertDialog/Popup/DropdownMenu/ModalBottomSheet | `PaintingDialogs.kt` 等 (独立窗口) | 不经 `overlayPanelsOpen`, 不挡按住 | 独立 WindowManager 窗口, 合成在 Activity 窗口 (含其 ZOrderOnTop 子 surface) 之上, 前缓冲盖不住; 模态窗口拿走触摸 |
+| `filterSessionActive` (滤镜 HUD) | `RealInkController.kt:387`, `CanvasTouchView.kt:265` | 保留 | 单指在画布上是滑动调参/长按对比, 不是笔画 |
+| `isTransformActive` | `RealInkController.kt:371/386` | 保留 | 变换手势不出墨; 前缓冲没有变换后的预览 |
+| `shiftTraceActive` | `CanvasTouchView.kt:3642-3654`, `RealInkController.kt:389` | 保留 | ShiftTraceOverlay 是整块画布范围的位移叠图, 不是有限矩形; 挖孔等于整屏挖空 |
+| 对称 mirrorGate FALLBACK | `RealInkController.kt:390-392` | 保留 | 非面板; 镜像回退本就无前缓冲镜像墨 |
+
+### 修复
+
+- `UiPanelSlot.LAYER_FILTER_ADJUST_CARD` (不可避让, 23 槽): 未钉住 + 滤镜调节页时卡片 `reportUiSlot`。
+  不可避让是为保持避让行为不变 (该卡片此前从不登记, 从不避让)。
+- `RealInkHoldPolicy.brushPanelBlocksHold / layerPanelBlocksHold / colorPanelBlocksHold` 纯函数;
+  `LayerPanel` 经 `onCanvasPassThroughChanged` 回报 `isFilterAdjust`, `PaintingPage` 据此放开图层面板阻挡。
+  顺序: 孔径在本帧布局登记, 放开在效果里回调 (下一帧重组) → 先有孔后按住。
+- 连带 (非按住): 该页 `overlayPanelsOpen` 变 false, 与"钉住面板"同语义 —— 画布悬停光标/局部失效/边缘返回
+  排除按普通画布处理, 卡片上方悬停经 `panelOcclusion.hitTest` 仍算 UI。普通模式与低延迟一致。
+
+### 面板避让兼容 (核对)
+
+- 渐隐 (50%) 只改 `evadedMask`, `snapshot()` 不含掩码 → 快照相等 → `rebuildUiExclusionSnapshot`
+  (`CanvasTouchView.kt:1089-1122`) 只 `updateActiveUiClips`, 不交还; 孔仍在, 窗口重画交叠区 (面板下墨可见)。
+- 移动/收起改 bounds 或清槽 → 快照不等 → `releaseAndCatchUp()` 交还主画布, 追平后清前缓冲, 无残孔。
+- `evadablePanelContent` 运笔中吃额外触点, 面板不能被拖动; 避让判定代码未改。
+
+### 对称避让与普通模式一致性 (只核对, 不改)
+
+- 包络 `CanvasTouchView.kt:6176-6232` (含 `writeSymmetricPoints` 镜像点) 与 DOWN `:5815` 都不看低延迟开关。
+- 预测点并入包络 `:6488-6505` 位于 `frontBufferPrediction = !hasSymmetry && frontBufferPredictionEnabled && BRUSH`
+  (`:6316`) 分支内: 对称时两种模式都不进 → 对称避让输入完全相同。
+- `armRealInkHold` 的 `clearAllEvasionState` (`:3645`) 只看 `shiftTraceActive`, 且 DOWN 时两种模式都调用。
+- 非对称差异 (既有, 非本轮): 低延迟 + 画笔时预测点会提前触发避让; 普通模式的 OEM 预测分支 (`:6567`) 不参与避让。
+
+### 验证
+
+- `RealInkHoldPolicyTest` 策略表; `UiPanelOcclusionTrackerTest` COUNT=23 + 渐隐快照相等 / 移动收起快照变化 /
+  滤镜调节卡片不避让。未动 native。
