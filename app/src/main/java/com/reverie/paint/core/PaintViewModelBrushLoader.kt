@@ -261,34 +261,17 @@ private fun PaintViewModel.loadBrushPresetsAfterAssets(
                 val fallbackPreset = if (isEraserTool) defaultEraserPreset else defaultDrawingPreset
 
                 val savedToolState = toolBrushStates[savedToolId]
-                // Saved preset indices are NATIVE-table indices; validate by item presence
+                // #136 A：冷启动也按名字解析。原来这里只校验「该索引上有没有笔」，
+                // 导入/删除预设重排之后就会选中别的笔，并把错索引连同错名字一起写回工具槽。
+                val legacyPresetIdx = prefs().getInt("last_brush_preset_index", -1)
                 val targetIndex =
-                    if (savedToolState != null && ordered.any { it.index == savedToolState.presetIndex }) {
-                        val candidate = ordered.first { it.index == savedToolState.presetIndex }
-                        val isCandidateEraser = candidate.group == "橡皮擦" ||
-                                candidate.name.startsWith("a)_Eraser", ignoreCase = true) ||
-                                candidate.name.contains("Eraser", ignoreCase = true)
-                        if (!isEraserTool && isCandidateEraser) {
-                            fallbackPreset.index
-                        } else {
-                            savedToolState.presetIndex
-                        }
-                    } else {
-                        val savedPresetIdx = prefs().getInt("last_brush_preset_index", -1)
-                        if (savedPresetIdx >= 0 && ordered.any { it.index == savedPresetIdx }) {
-                            val candidate = ordered.first { it.index == savedPresetIdx }
-                            val isCandidateEraser = candidate.group == "橡皮擦" ||
-                                    candidate.name.startsWith("a)_Eraser", ignoreCase = true) ||
-                                    candidate.name.contains("Eraser", ignoreCase = true)
-                            if (!isEraserTool && isCandidateEraser) {
-                                fallbackPreset.index
-                            } else {
-                                savedPresetIdx
-                            }
-                        } else {
-                            fallbackPreset.index
-                        }
-                    }
+                    ToolPresetMemory.resolveColdStart(
+                        storedName = savedToolState?.presetName ?: "",
+                        storedIndex = savedToolState?.presetIndex ?: -1,
+                        legacyIndex = legacyPresetIdx,
+                        presets = ordered,
+                        rejectEraser = !isEraserTool,
+                    )?.index ?: fallbackPreset.index
                 applyTool(savedToolId)
                 selectBrushPreset(targetIndex)
             }

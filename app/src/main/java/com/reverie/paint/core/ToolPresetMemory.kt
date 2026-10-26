@@ -33,4 +33,37 @@ internal object ToolPresetMemory {
         if (storedIndex < 0) return null
         return presets.firstOrNull { it.index == storedIndex }
     }
+
+    /**
+     * 冷启动恢复上次使用的那支笔。
+     *
+     * 与 [resolve] 的区别只在于多一层「旧数据」兜底：工具槽里既没有名字也没有索引记录时
+     * （很早的版本只写过 `last_brush_preset_index`），才用那个更老的键。
+     *
+     * 之所以单独抽出来：冷启动这条路径原来直接拿持久化的整数索引去 `selectBrushPreset`，
+     * 只校验「这个索引上有没有笔」，不校验「还是不是那支笔」。导入/删除预设重排之后，
+     * 重启 App 就会选中别的笔，并且把这个错索引连同错名字一起写回工具槽 —— 之后连按名字
+     * 解析也救不回来（名字已经被覆盖成错的那支）。这段逻辑要能被 JVM 单测覆盖，所以放在这里。
+     *
+     * [rejectEraser] 为 true 时（当前工具不是橡皮）拒掉解析出的橡皮笔，由调用方换默认画笔。
+     */
+    fun resolveColdStart(
+        storedName: String,
+        storedIndex: Int,
+        legacyIndex: Int,
+        presets: List<BrushPresetInfo>,
+        rejectEraser: Boolean,
+    ): BrushPresetInfo? {
+        val candidate = resolve(storedName, storedIndex, presets)
+            ?: resolve("", legacyIndex, presets)
+            ?: return null
+        if (rejectEraser && candidate.isEraserLike()) return null
+        return candidate
+    }
+
+    /** 与设置/面板里的判定保持一致：分组、`a)_Eraser*` 前缀、名字里含 Eraser */
+    private fun BrushPresetInfo.isEraserLike(): Boolean =
+        group == "橡皮擦" ||
+            name.startsWith("a)_Eraser", ignoreCase = true) ||
+            name.contains("Eraser", ignoreCase = true)
 }

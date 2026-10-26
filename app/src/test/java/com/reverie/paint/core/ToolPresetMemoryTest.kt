@@ -61,4 +61,71 @@ class ToolPresetMemoryTest {
         val hit = ToolPresetMemory.resolve("G pen", -1, shifted)
         assertEquals(66, hit?.index)
     }
+
+    // ---- 冷启动恢复（resolveColdStart）----
+
+    @Test
+    fun coldStartUsesNameNotStaleIndex() {
+        // 槽里记着「a)_Eraser_Circle + 旧索引 47」；47 现在是星野。启动必须按名字给 144
+        val hit = ToolPresetMemory.resolveColdStart(
+            storedName = "a)_Eraser_Circle",
+            storedIndex = 47,
+            legacyIndex = 66,
+            presets = shifted,
+            rejectEraser = false,
+        )
+        assertEquals("启动恢复必须按名字，不能按重排后的索引", 144, hit?.index)
+    }
+
+    @Test
+    fun coldStartFallsBackToLegacyIndexOnlyWhenSlotMissing() {
+        // 槽里什么都没有（很早的版本只写过 last_brush_preset_index）
+        val hit = ToolPresetMemory.resolveColdStart(
+            storedName = "",
+            storedIndex = -1,
+            legacyIndex = 66,
+            presets = shifted,
+            rejectEraser = false,
+        )
+        assertEquals(66, hit?.index)
+    }
+
+    @Test
+    fun coldStartRejectsEraserForDrawingTool() {
+        // 当前工具是画笔，但解析出来的是橡皮（旧索引指到了 a)_Eraser_Circle）
+        assertNull(
+            ToolPresetMemory.resolveColdStart(
+                storedName = "a)_Eraser_Circle",
+                storedIndex = 144,
+                legacyIndex = -1,
+                presets = shifted,
+                rejectEraser = true,
+            ),
+        )
+        // 橡皮工具本身则允许
+        assertEquals(
+            144,
+            ToolPresetMemory.resolveColdStart(
+                storedName = "a)_Eraser_Circle",
+                storedIndex = 144,
+                legacyIndex = -1,
+                presets = shifted,
+                rejectEraser = false,
+            )?.index,
+        )
+    }
+
+    @Test
+    fun coldStartDeletedNameDoesNotFallBackToItsIndex() {
+        // 名字还在但笔已删除：不能拿同名索引位置上的别的笔顶上
+        assertNull(
+            ToolPresetMemory.resolveColdStart(
+                storedName = "Ultra Soft Pencil",
+                storedIndex = 0,
+                legacyIndex = -1,
+                presets = shifted,
+                rejectEraser = true,
+            ),
+        )
+    }
 }
