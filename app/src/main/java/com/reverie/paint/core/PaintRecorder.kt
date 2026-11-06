@@ -653,7 +653,7 @@ class PaintRecorder {
                 val magic = String(r.readBytes(8), Charsets.US_ASCII)
                 if (magic != MAGIC) return null
                 val ver = r.u16()
-                if (ver != 1 && ver != 2) return null
+                if (ver != 1 && ver != 2 && ver != 3) return null
                 val w = r.u16()
                 val h = r.u16()
                 val flags = r.u8()
