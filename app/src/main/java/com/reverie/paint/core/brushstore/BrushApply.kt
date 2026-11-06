@@ -120,8 +120,19 @@ object BrushApply {
     }
 
     /** CONTEXT 事件的实时值：必须在 loadBrushPreset(File) 之后施加，预设加载会重置尺寸/不透明度/流量 */
-    fun applyReplayContext(toolMode: Int, size: Double, opacity: Double, flow: Double, compositeOp: String, color: String) {
+    fun applyReplayContext(
+        toolMode: Int,
+        size: Double,
+        opacity: Double,
+        flow: Double,
+        compositeOp: String,
+        color: String,
+        isEraser: Boolean? = null,
+    ) {
         engine.setToolMode(toolMode)
+        if (isEraser != null) {
+            engine.setPresetIsEraser(isEraser)
+        }
         engine.setBrushSize(size)
         engine.setBrushOpacity(opacity)
         engine.setBrushFlow(flow)
@@ -143,11 +154,11 @@ object BrushApply {
             replayEngine.setBrushRotation(rotation)
             replayEngine.setBrushRatio(ratio)
             replayEngine.setBrushSharpness(sharpness)
+            replayEngine.setBrushSmudgeRate(smudgeRate)
+            replayEngine.setBrushSmudgeLength(smudgeLength)
+            replayEngine.setBrushAirbrush(airbrushEnabled, airbrushRate)
+            engine.setBrushSecondaryColor(secondaryColor)
         }
-        replayEngine.setBrushSmudgeRate(smudgeRate)
-        replayEngine.setBrushSmudgeLength(smudgeLength)
-        engine.setBrushSecondaryColor(secondaryColor)
-        replayEngine.setBrushAirbrush(airbrushEnabled, airbrushRate)
     }
 
     fun applyReplayFade(v: Double) = replayEngine.setBrushFade(v)
@@ -264,7 +275,7 @@ object BrushApply {
         return ReplayTarget(index, eraser)
     }
 
-    fun applyReplay(sel: PlaybackPresetCache.Select, isEraser: Boolean = false): PlaybackPresetCache.Resolution {
+    fun applyReplay(sel: PlaybackPresetCache.Select, isEraser: Boolean? = null): PlaybackPresetCache.Resolution {
         val res = PlaybackPresetCache.resolve(sel)
         val root = BrushStoreBootstrap.storeRootDir
         when (res) {
@@ -279,7 +290,7 @@ object BrushApply {
                 }
                 if (!ok) {
                     BrushDiagnostics.log("playback_missing", "id" to sel.presetId, "md5" to sel.md5, "reason" to "exact_load_or_tip_failed")
-                    engine.setPresetIsEraser(isEraser)
+                    if (isEraser != null) engine.setPresetIsEraser(isEraser)
                     return PlaybackPresetCache.Resolution.MISSING
                 }
             }
@@ -292,24 +303,28 @@ object BrushApply {
                 }
                 if (!ok) {
                     BrushDiagnostics.log("playback_missing", "id" to sel.presetId, "md5" to sel.md5, "reason" to "cached_load_or_tip_failed")
-                    engine.setPresetIsEraser(isEraser)
+                    if (isEraser != null) engine.setPresetIsEraser(isEraser)
                     return PlaybackPresetCache.Resolution.MISSING
                 }
             }
             PlaybackPresetCache.Resolution.MISSING -> {
                 // 新录制（有 md5）但录制时的字节找不到：用该笔的快照（原始字节）重建，
-                // 之后由 CONTEXT_EXT 的形状值叠加（= 快照 + 覆盖）。旧录制（没有 md5）不走这里，沿用当前笔。
+                // 之后由 CONTEXT_EXT 的形状值叠加（= 快照 + 覆盖）。
+                // 旧录制或 CONTEXT 触发的选笔（没有 md5）：通过 loadBrushPreset(sel.index) 载入原生预设兜底。
                 val rebuilt = if (sel.md5.isNotEmpty()) PlaybackPresetCache.rebuildFromSnapshot(sel.presetId) else null
                 if (rebuilt != null && engine.loadBrushPresetFile(rebuilt.absolutePath) && tipOk(rebuilt)) {
                     BrushDiagnostics.log("playback_rebuilt", "id" to sel.presetId, "md5" to sel.md5, "file" to rebuilt.name)
-                    engine.setPresetIsEraser(isEraser)
+                    if (isEraser != null) engine.setPresetIsEraser(isEraser)
                     return PlaybackPresetCache.Resolution.REBUILT
+                }
+                if (sel.md5.isEmpty() && sel.index >= 0) {
+                    engine.loadBrushPreset(sel.index)
                 }
                 BrushDiagnostics.log("playback_missing", "id" to sel.presetId, "md5" to sel.md5, "rebuilt" to (rebuilt != null))
             }
             PlaybackPresetCache.Resolution.REBUILT -> {}
         }
-        engine.setPresetIsEraser(isEraser)
+        if (isEraser != null) engine.setPresetIsEraser(isEraser)
         return res
     }
 
@@ -438,29 +453,33 @@ object BrushApply {
                 if (eff.compositeOp.isNotBlank() && eff.compositeOp != "erase") eff.compositeOp else nativeCompOp
             }
 
+            val nonPreset = NonPresetState(
+                isEraser = origIsEraser || isEraserPreset,
+                color = vm.brushColor,
+                secondaryColor = vm.brushSecondaryColor,
+                compositeOverride = effectiveCompOp,
+                size = origSize,
+                opacity = origOpacity,
+                flow = origFlow,
+                angleDeg = liveAngle(eff),
+            )
             if (engine.loadBrushPreset(origPreset)) {
                 com.reverie.paint.core.Breadcrumbs.record("Brush", "Restore preset [$origPreset]: ${preset.name}")
-                val nonPreset = NonPresetState(
-                    isEraser = origIsEraser || isEraserPreset,
-                    color = vm.brushColor,
-                    secondaryColor = vm.brushSecondaryColor,
-                    compositeOverride = effectiveCompOp,
-                    size = origSize,
-                    opacity = origOpacity,
-                    flow = origFlow,
-                    angleDeg = liveAngle(eff),
-                )
-                applyAfterLoad(engine, nonPreset)
+            } else {
+                BrushDiagnostics.log("restore_preset_load_failed", "index" to origPreset)
             }
+            applyAfterLoad(engine, nonPreset)
             engine.setToolMode(origMode)
+            engine.setPresetIsEraser(nonPreset.isEraser)
+            nonPreset.compositeOverride?.let { engine.setBrushCompositeOp(it) }
             vm.fetchBrushOutlinePolygons()
         } else {
+            engine.setToolMode(origMode)
             engine.setPresetIsEraser(origIsEraser)
             engine.setBrushCompositeOp(origOp)
             engine.setBrushSize(origSize)
             engine.setBrushOpacity(origOpacity)
             engine.setBrushFlow(origFlow)
-            engine.setToolMode(origMode)
         }
     }
 

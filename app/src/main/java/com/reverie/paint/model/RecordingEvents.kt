@@ -33,7 +33,7 @@ package com.reverie.paint.model
  */
 object RecordingEvents {
     const val MAGIC = "REVPREC1"
-    const val VERSION = 2
+    const val VERSION = 3
 
     // Stroke events
     const val STROKE_START = 0x01
@@ -103,6 +103,7 @@ object RecordingEvents {
     const val L_ALPHA_INHERITED = 39 // index=层号; arg="1"开启/"0"关闭
     const val L_INVERT_MASK = 40 // index=蒙版层号
     const val L_APPLY_MASK = 41 // index=蒙版层号或父层号
+    const val L_COPY_SELECTION = 42 // index=1(剪切)/0(复制); arg=自定义层名(空串走引擎默认名)
 
 
     // ---- Tool op codes (TOOL_OP; payload layout is op-specific) ----
@@ -158,7 +159,6 @@ object RecordingEvents {
     const val T_ENCLOSE_FILL = 48 // count u16, points x/y f32[], tol u16, merged u8, expand i16, feather u16, closeGap u16, method u8, color u32, incContour u8
     const val T_PRESET_SELECT_V2 = 50 // idx u16 (0xFFFF 哨兵), name str, presetId str, 有效字节 md5 str（W-12，v2 管理的预设）
     const val T_GRADIENT_V3 = 49 // x1..y2 f32, type u8, repeat u8, reverse u8, opacity f32, dither u8, blendMode str, count u16, stops (pos f32, color u32)...
-
     /**
      * 会话边界: 每次 [PaintRecorder.beginSession] (新建画布 / 打开工程) 作为该会话的
      * 第一条事件发出。payload: undoLimit u16。
@@ -169,6 +169,8 @@ object RecordingEvents {
      * "内容缺失 / 各种形状乱入"。定位方法见 scripts/replay-verify.py)。
      */
     const val T_SESSION_START = 51 // undoLimit u16
+    // 52: 上游已把 51 用作 T_SESSION_START，副本变换不能再占用 51。
+    const val T_TRANSFORM_V2 = 52 // 9 f64 + copyOnly u8 (保留原图只变换副本标识)
 }
 
 /** Growable byte sink with little-endian primitive writers. */
@@ -179,6 +181,11 @@ class RecordingBuffer(
         private set
     var size = 0
         private set
+
+    /** 丢弃 [mark] 之后的字节。越界标记不动。 */
+    internal fun rewind(mark: Int) {
+        if (mark in 0..size) size = mark
+    }
 
     private fun ensure(extra: Int) {
         if (size + extra <= data.size) return

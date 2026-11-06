@@ -225,14 +225,14 @@ class PlaybackPresetResolutionTest {
         assertEquals(listOf("eraser:true"), eng.calls)
     }
 
-    /** 旧录制（选笔事件没有 md5）：行为不变，不重建、不载入 */
+    /** 旧录制或 CONTEXT 触发选笔（没有 md5）：不写重建文件，通过 loadBrushPreset(sel.index) 载入原生预设兜底 */
     @Test
     fun oldRecordingWithoutMd5KeepsCurrentBehavior() {
         val s = stems[4]
         val eng = FakeEngine(); BrushApply.engine = eng
         val sel = PlaybackPresetCache.Select(2, s, BrushIdentity.builtinId(s), "")
         assertEquals(PlaybackPresetCache.Resolution.MISSING, BrushApply.applyReplay(sel, false))
-        assertEquals(listOf("eraser:false"), eng.calls)
+        assertEquals(listOf("load:2", "eraser:false"), eng.calls)
         assertTrue(PlaybackPresetCache.cacheDir(storeRoot).listFiles().orEmpty().none { it.name.startsWith("rebuilt-") })
     }
 }

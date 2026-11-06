@@ -56,9 +56,9 @@ class PaintRecorder {
     // beginSession): prepended to the event stream on serialize() so playback
     // reproduces strokes drawn in earlier sessions too, instead of baking
     // them into the static snapshot.
-    private var priorEvents: ByteArray? = null
-    private var priorEventCount = 0
-    private var priorTotalMs = 0L
+    internal var priorEvents: ByteArray? = null
+    internal var priorEventCount = 0
+    internal var priorTotalMs = 0L
 
     /** Written on the render thread (beginSession), read on the main
      *  thread (touch hooks and op hooks) - must be volatile for
@@ -75,6 +75,8 @@ class PaintRecorder {
         private set
     var eventCount = 0
         private set
+    /** 当前会话事件流超过 [MAX_RECORDING_BYTES] 后不再写入，避免单会话无限膨胀。 */
+    private var sessionTooLarge = false
 
     // 快照字节缓存: 一个会话内快照文件内容不变, 而自动保存每隔几分钟就要
     // serialize 一次 —— 每次都 readBytes() 等于反复把几十 MB 从磁盘读进一个
@@ -86,6 +88,7 @@ class PaintRecorder {
     // Context diff state (sentinel values = unknown / not yet captured)
     private var lastToolMode = -2
     private var lastPreset = -2
+    private var lastPresetSelect = -2
     private var lastSize = Double.NaN
     private var lastOpacity = Double.NaN
     private var lastFlow = Double.NaN
@@ -117,6 +120,7 @@ class PaintRecorder {
         sessionW = w
         sessionH = h
         eventCount = 0
+        sessionTooLarge = false
         lastEventMs = android.os.SystemClock.elapsedRealtime()
         sessionStartMs = lastEventMs
         android.util.Log.d("ReverieRec", "beginSession w=$w h=$h snap=${snapshotSource != null} prior=${prior != null}")
@@ -127,6 +131,7 @@ class PaintRecorder {
         }
         lastToolMode = -2
         lastPreset = -2
+        lastPresetSelect = -2
         lastSize = Double.NaN
         lastOpacity = Double.NaN
         lastFlow = Double.NaN
@@ -135,10 +140,11 @@ class PaintRecorder {
         lastColor = null
         lastLayer = -2
         snapshotFile = null
-        if (prior != null) {
+        val chainValid = isPriorChainValid(prior)
+        if (prior != null && chainValid) {
             synchronized(ioLock) {
                 // 超大录像流保护: 超过 32MB 的历史事件流不继续链式堆叠，防止单工程长期绘画导致内存无限膨胀
-                priorEvents = prior.events.takeIf { it.isNotEmpty() && it.size <= MAX_RECORDING_BYTES }
+                priorEvents = prior.events.takeIf { it.isNotEmpty() }
                 priorEventCount = if (priorEvents != null) prior.eventCount else 0
                 priorTotalMs = if (priorEvents != null) prior.totalMs else 0L
             }
@@ -211,6 +217,7 @@ class PaintRecorder {
             buffer = null
             lastPatternPng = null
             eventCount = 0
+            sessionTooLarge = false
             priorEvents = null
             priorEventCount = 0
             priorTotalMs = 0L
@@ -344,18 +351,27 @@ class PaintRecorder {
 
     // ---- Event emission (main thread; ignored while not recording) ----
 
-    private fun emit(
+    private inline fun emit(
         type: Int,
         writePayload: (RecordingBuffer) -> Unit,
     ) {
         synchronized(ioLock) {
+            if (sessionTooLarge) return
             val b = buffer ?: return
+            val mark = b.size
+            val prevEventMs = lastEventMs
             val now = android.os.SystemClock.elapsedRealtime()
             val dt = (now - lastEventMs).coerceAtLeast(0L)
             lastEventMs = now
             b.u8(type)
             b.varint(dt.toInt().coerceAtMost(Int.MAX_VALUE))
             writePayload(b)
+            if (recordingExceedsCap(mark, b.size - mark)) {
+                b.rewind(mark)
+                lastEventMs = prevEventMs
+                sessionTooLarge = true
+                return
+            }
             eventCount++
         }
     }
@@ -374,10 +390,28 @@ class PaintRecorder {
         x: Float,
         y: Float,
         pressure: Float,
-    ) = emit(STROKE_MOVE) {
-        it.f32(x)
-        it.f32(y)
-        it.f32(pressure)
+    ) {
+        synchronized(ioLock) {
+            if (sessionTooLarge) return
+            val b = buffer ?: return
+            val mark = b.size
+            val prevEventMs = lastEventMs
+            val now = android.os.SystemClock.elapsedRealtime()
+            val dt = (now - lastEventMs).coerceAtLeast(0L)
+            lastEventMs = now
+            b.u8(STROKE_MOVE)
+            b.varint(dt.toInt().coerceAtMost(Int.MAX_VALUE))
+            b.f32(x)
+            b.f32(y)
+            b.f32(pressure)
+            if (recordingExceedsCap(mark, b.size - mark)) {
+                b.rewind(mark)
+                lastEventMs = prevEventMs
+                sessionTooLarge = true
+                return
+            }
+            eventCount++
+        }
     }
 
     fun strokeEnd() = emit(STROKE_END) {}
@@ -405,6 +439,9 @@ class PaintRecorder {
             layer == lastLayer
         ) {
             return
+        }
+        if (preset != lastPreset) {
+            lastFade = Double.NaN
         }
         lastToolMode = toolMode
         lastPreset = preset
@@ -575,6 +612,7 @@ class PaintRecorder {
         synchronized(ioLock) {
             lastToolMode = -2
             lastPreset = -2
+            lastPresetSelect = -2
             lastSize = Double.NaN
             lastOpacity = Double.NaN
             lastFlow = Double.NaN
@@ -584,8 +622,29 @@ class PaintRecorder {
         }
     }
 
+    /** Marks [preset] as emitted via T_PRESET_SELECT(_V2); returns true if changed since last emission. */
+    fun markPresetSelected(preset: Int): Boolean =
+        synchronized(ioLock) {
+            if (preset == lastPresetSelect) {
+                false
+            } else {
+                lastPresetSelect = preset
+                true
+            }
+        }
+
     companion object {
         const val MAX_RECORDING_BYTES = 32 * 1024 * 1024 // 32MB 录制事件流上限 (防超长历史堆叠膨胀)
+
+        internal fun isPriorChainValid(prior: ParsedRecording?): Boolean {
+            return prior != null && (prior.events.isEmpty() || prior.events.size <= MAX_RECORDING_BYTES)
+        }
+
+        /** 当前已用字节加上本事件载荷是否越过 32MB。载荷为负视为越界。 */
+        internal fun recordingExceedsCap(currentSize: Int, payloadBytes: Int): Boolean {
+            if (currentSize < 0 || payloadBytes < 0) return true
+            return currentSize.toLong() + payloadBytes.toLong() > MAX_RECORDING_BYTES.toLong()
+        }
 
         /** Parse a recording blob; null on any error. */
         fun parse(data: ByteArray): ParsedRecording? {

@@ -7,6 +7,7 @@ import com.reverie.paint.model.RecordingEvents.CONTEXT_EXT
 import com.reverie.paint.model.RecordingEvents.FILTER
 import com.reverie.paint.model.RecordingEvents.FILTER_LUT
 import com.reverie.paint.model.RecordingEvents.LAYER_OP
+import com.reverie.paint.model.RecordingEvents.STROKE_END
 import com.reverie.paint.model.RecordingEvents.STROKE_MOVE
 import com.reverie.paint.model.RecordingEvents.TOOL_OP
 import com.reverie.paint.model.RecordingEvents.T_CROP
@@ -18,7 +19,10 @@ import com.reverie.paint.model.RecordingEvents.T_POLYGON
 import com.reverie.paint.model.RecordingEvents.T_PRESET_SELECT_V2
 import com.reverie.paint.model.RecordingEvents.T_SELECT_ALL
 import com.reverie.paint.model.RecordingEvents.T_SHAPE
+import com.reverie.paint.model.RecordingEvents.T_TRANSFORM
+import com.reverie.paint.model.RecordingEvents.T_TRANSFORM_V2
 import com.reverie.paint.model.RecordingEvents.T_WARP
+import com.reverie.paint.model.RecordingEvents.L_COPY_SELECTION
 import com.reverie.paint.model.RecordingReader
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -319,5 +323,105 @@ class SkipReplayEventPayloadTest {
         buf3Stroke.f32(200f)
         buf3Stroke.f32(0.8f)
         assertEquals(30L, ReplayTimeline.effectiveTotalMs(buf3Stroke.data.copyOf(buf3Stroke.size), 2, 1000L, 2))
+    }
+
+    @Test
+    fun `T_TRANSFORM 与 T_TRANSFORM_V2 及 L_COPY_SELECTION 跳读无错位`() {
+        skipAndAssert(TOOL_OP) {
+            u8(T_TRANSFORM)
+            repeat(9) { f64(1.0) }
+        }
+        skipAndAssert(TOOL_OP) {
+            u8(T_TRANSFORM_V2)
+            repeat(9) { f64(1.0) }
+            u8(1)
+        }
+        skipAndAssert(LAYER_OP) {
+            u8(L_COPY_SELECTION)
+            u16(1)
+            str("Selection 2")
+        }
+
+        val stream = RecordingBuffer(128)
+        stream.u8(LAYER_OP)
+        stream.varint(15)
+        stream.u8(L_COPY_SELECTION)
+        stream.u16(0)
+        stream.str("")
+        stream.u8(TOOL_OP)
+        stream.varint(25)
+        stream.u8(T_TRANSFORM_V2)
+        repeat(9) { stream.f64(it.toDouble()) }
+        stream.u8(1)
+        assertEquals(40L, ReplayTimeline.effectiveTotalMs(stream.data.copyOf(stream.size), 2, 1000L, 2))
+    }
+
+    @Test
+    fun `resolveSelectAllMode version gate and ambiguous stream safety`() {
+        val buf = RecordingBuffer(32)
+        buf.u16(1)
+        val strokeStartPos = buf.size
+        buf.u8(1) // STROKE_START
+        buf.varint(1)
+        buf.f32(10f)
+        buf.f32(20f)
+        buf.f32(0.5f)
+
+        // v1 录制无 mode 字节：直接返回 0，游标不推进
+        val readerV1 = RecordingReader(buf.data.copyOf(buf.size))
+        val layerV1 = readerV1.u16()
+        assertEquals(1, layerV1)
+        val modeV1 = resolveSelectAllMode(readerV1, version = 1)
+        assertEquals(0, modeV1)
+        assertEquals(strokeStartPos, readerV1.pos)
+
+        // v2 但流产生歧义（既满足 mode 试跳又满足 not-mode 试跳）：保守返回 0，绝不吃掉下一事件的 type 字节
+        val readerV2Ambiguous = RecordingReader(buf.data.copyOf(buf.size))
+        readerV2Ambiguous.u16()
+        val modeV2Ambiguous = resolveSelectAllMode(readerV2Ambiguous, version = 2)
+        assertEquals(0, modeV2Ambiguous)
+        assertEquals(strokeStartPos, readerV2Ambiguous.pos)
+
+        // v2 且确实包含 mode 字节：mode 成功解析并消费 1 字节
+        val bufMode = RecordingBuffer(32)
+        bufMode.u16(1)
+        bufMode.u8(2)
+        val nextEventPos = bufMode.size
+        bufMode.u8(1)
+        bufMode.varint(1)
+        bufMode.f32(10f)
+        bufMode.f32(20f)
+        bufMode.f32(0.5f)
+
+        val readerV2WithMode = RecordingReader(bufMode.data.copyOf(bufMode.size))
+        readerV2WithMode.u16()
+        val modeParsed = resolveSelectAllMode(readerV2WithMode, version = 2)
+        assertEquals(2, modeParsed)
+        assertEquals(nextEventPos, readerV2WithMode.pos)
+
+        // v3 录制模式：确定性消费 1 字节 mode
+        val bufV3 = RecordingBuffer(16)
+        bufV3.u16(5)
+        bufV3.u8(3) // mode = INTERSECT
+        val readerV3 = RecordingReader(bufV3.data.copyOf(bufV3.size))
+        readerV3.u16()
+        val modeV3 = resolveSelectAllMode(readerV3, version = 3)
+        assertEquals(3, modeV3)
+        assertEquals(3, readerV3.pos)
+
+        // v2 反例验证 (Grok 对抗用例: mode=1, 紧接多个 STROKE_END，流长度 19 字节)
+        val bufGrok = RecordingBuffer(32)
+        bufGrok.u16(1) // layer = 1
+        bufGrok.u8(1) // mode = 1 (ADD)
+        val expectedPos = bufGrok.size // 3
+        repeat(8) {
+            bufGrok.u8(STROKE_END)
+            bufGrok.varint(10)
+        }
+        val readerGrok = RecordingReader(bufGrok.data.copyOf(bufGrok.size))
+        readerGrok.u16()
+        val modeGrok = resolveSelectAllMode(readerGrok, version = 2)
+        assertEquals(1, modeGrok)
+        assertEquals(expectedPos, readerGrok.pos)
     }
 }

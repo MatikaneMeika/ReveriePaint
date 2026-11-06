@@ -521,6 +521,25 @@ import kotlinx.coroutines.withContext
         return if (engineSize.isFinite()) engineSize else 20.0
     }
 
+    internal fun PaintViewModel.recordPresetSelectToRecorder(
+        index: Int,
+        preset: BrushPresetInfo? = brushPresets.firstOrNull { it.index == index },
+    ) {
+        if (preset == null || !recorder.recording) return
+        recorder.markPresetSelected(index)
+        val v2Select = com.reverie.paint.core.brushstore.PlaybackPresetCache.recordSelect(index, preset.id)
+        if (v2Select != null) {
+            recorder.toolOp(com.reverie.paint.model.RecordingEvents.T_PRESET_SELECT_V2) {
+                com.reverie.paint.core.brushstore.PlaybackPresetCache.write(it, v2Select)
+            }
+        } else {
+            recorder.toolOp(com.reverie.paint.model.RecordingEvents.T_PRESET_SELECT) {
+                it.u16(if (index < 0) 0xFFFF else index.coerceIn(0, 0xFFFE))
+                it.str(preset.name)
+            }
+        }
+    }
+
     internal fun PaintViewModel.selectBrushPreset(index: Int, recordToToolState: Boolean = true) {
         if (isEraserMode) {
             setEraserModeInternal(false, showToast = false)
@@ -535,7 +554,7 @@ import kotlinx.coroutines.withContext
             recordBrushUsageStats(preset.name)
         }
         val isBuiltIn = preset?.isBuiltIn == true
-        val isEraserPreset = preset?.group == "橡皮擦" || preset?.name?.startsWith("a)_Eraser", ignoreCase = true) == true || preset?.name?.contains("Eraser", ignoreCase = true) == true
+        val isEraserPreset = BrushStoreVm.isEraserPreset(preset)
 
         if (preset != null && recorder.recording) {
             // Replay resolves the preset by NAME (the native table may be
@@ -1155,6 +1174,13 @@ import kotlinx.coroutines.withContext
                             },
                         )
                     }
+                } catch (oom: OutOfMemoryError) {
+                    BrushDiagnostics.log(
+                        "import_oom",
+                        "file" to filename,
+                        "msg" to oom.message,
+                    )
+                    return BrushImportResult(success = false)
                 } catch (e: IOException) {
                     BrushDiagnostics.log(
                         "import_io_error",
@@ -1352,6 +1378,10 @@ import kotlinx.coroutines.withContext
             } else {
                 BrushImportResult(success = false)
             }
+        } catch (oom: OutOfMemoryError) {
+            android.util.Log.e("ReveriePaint", "importSingleBrushInternal out of memory", oom)
+            BrushDiagnostics.log("import_oom", "uri" to uri.toString(), "msg" to oom.message)
+            BrushImportResult(success = false)
         } catch (e: Exception) {
             android.util.Log.e("ReveriePaint", "importSingleBrushInternal failed", e)
             BrushImportResult(success = false)

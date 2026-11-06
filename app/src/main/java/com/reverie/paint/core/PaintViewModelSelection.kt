@@ -630,6 +630,16 @@ internal fun PaintViewModel.hQueued(): Int = if (renderHandler?.hasMessages(0) =
 
 internal fun PaintViewModel.lassoFill(points: List<Pair<Int, Int>>) {
     if (recorder.recording) {
+        recorder.captureContext(
+            toolMode = 0,
+            preset = brushPresetIndex,
+            size = brushSize,
+            opacity = brushOpacity,
+            flow = brushFlow,
+            compositeOp = brushCompositeOp,
+            color = brushColor,
+            layer = currentLayerIndex,
+        )
         recorder.pointsOp(T_LASSO_FILL, points)
     }
     val xs = points.map { it.first }.toIntArray()
@@ -682,6 +692,16 @@ internal fun PaintViewModel.drawText(
     }
 
     if (recorder.recording) {
+        recorder.captureContext(
+            toolMode = 0,
+            preset = brushPresetIndex,
+            size = brushSize,
+            opacity = brushOpacity,
+            flow = brushFlow,
+            compositeOp = brushCompositeOp,
+            color = brushColor,
+            layer = currentLayerIndex,
+        )
         recorder.toolOp(T_TEXT) {
             it.f32(x)
             it.f32(y)
@@ -709,6 +729,18 @@ internal fun PaintViewModel.drawShape(
     filled: Boolean = shapeFillMode == 1 || shapeFillMode == 2,
 ) {
     if (recorder.recording) {
+        val effToolMode = if (isEraserMode && currentToolId == "brush") 1 else 0
+        val effCompOp = if (effToolMode == 1) "erase" else brushCompositeOp
+        recorder.captureContext(
+            toolMode = effToolMode,
+            preset = brushPresetIndex,
+            size = brushSize,
+            opacity = brushOpacity,
+            flow = brushFlow,
+            compositeOp = effCompOp,
+            color = brushColor,
+            layer = currentLayerIndex,
+        )
         recorder.toolOp(T_SHAPE) {
             it.u8(kind)
             it.f32(x1)
@@ -751,6 +783,16 @@ internal fun PaintViewModel.floodFill(
         return
     }
     if (recorder.recording) {
+        recorder.captureContext(
+            toolMode = 0,
+            preset = brushPresetIndex,
+            size = brushSize,
+            opacity = brushOpacity,
+            flow = brushFlow,
+            compositeOp = brushCompositeOp,
+            color = brushColor,
+            layer = currentLayerIndex,
+        )
         // V3 携带填充色: 引擎用自身 m_brushColor 填充, 回放若不带色会漂到
         // 上一个 CONTEXT 的颜色
         recorder.toolOp(T_FILL_V3) {
@@ -787,6 +829,16 @@ internal fun PaintViewModel.commitTypographyToCanvas() {
     val (textBmp, docLeft, docTop) = renderResult
 
     if (recorder.recording) {
+        recorder.captureContext(
+            toolMode = 0,
+            preset = brushPresetIndex,
+            size = brushSize,
+            opacity = brushOpacity,
+            flow = brushFlow,
+            compositeOp = brushCompositeOp,
+            color = brushColor,
+            layer = currentLayerIndex,
+        )
         recorder.toolOp(T_TEXT) {
             it.f32(cfg.posX)
             it.f32(cfg.posY)
@@ -1144,6 +1196,9 @@ internal fun PaintViewModel.stashAndClearSelection() {
     if (!hasSelection) return
     transientTransformSelectionPending = true
     clearSelectionOverlayLocal()
+    if (recorder.recording) {
+        recorder.toolOp(T_CLEAR_SELECTION)
+    }
     runCore(render = false, after = {
         refreshDisplay()
     }) {

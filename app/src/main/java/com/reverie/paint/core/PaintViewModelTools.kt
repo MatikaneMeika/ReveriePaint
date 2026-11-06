@@ -235,6 +235,9 @@ internal fun PaintViewModel.touchStart(
         val strokeFlow = if (isEraserOverride) effEraserFlow else brushFlow
         val strokeOp = if (isModeEraser) "erase" else brushCompositeOp
 
+        if (strokePreset >= 0 && recorder.markPresetSelected(strokePreset)) {
+            recordPresetSelectToRecorder(strokePreset)
+        }
         recorder.captureContext(
             toolMode = mode,
             preset = strokePreset,
@@ -247,24 +250,27 @@ internal fun PaintViewModel.touchStart(
         )
         val strokePid = brushPresets.firstOrNull { it.index == strokePreset }?.id
         val strokeCustomized = strokePid?.let { BrushStoreVm.hasEffectivePreset(it) } == true
+
         recorder.captureContextExt(
-            softness = brushSoftness,
-            spacing = brushSpacing,
-            angle = brushAngle,
-            scatter = brushScatter,
-            rotation = brushRotation,
-            ratio = brushRatio,
-            sharpness = brushSharpness,
-            smudgeRate = brushSmudgeRate,
-            smudgeLength = brushSmudgeLength,
+            softness = if (isEraserOverride) KppHelper.SOFTNESS_NEUTRAL else brushSoftness,
+            spacing = if (isEraserOverride) 0.1 else brushSpacing,
+            angle = if (isEraserOverride) 0.0 else brushAngle,
+            scatter = if (isEraserOverride) 0.0 else brushScatter,
+            rotation = if (isEraserOverride) 0.0 else brushRotation,
+            ratio = if (isEraserOverride) 1.0 else brushRatio,
+            sharpness = if (isEraserOverride) 0.0 else brushSharpness,
+            smudgeRate = if (isEraserOverride) 0.0 else brushSmudgeRate,
+            smudgeLength = if (isEraserOverride) 0.0 else brushSmudgeLength,
             secondaryColor = brushSecondaryColor,
-            airbrushEnabled = brushAirbrush,
-            airbrushRate = brushAirbrushRate,
-            // 与回读非空等价（回读恒标这两项为 true），只 stat 不读盘
-            isCustomized = strokeCustomized,
-            spacingCustomized = strokeCustomized,
+            airbrushEnabled = if (isEraserOverride) false else brushAirbrush,
+            airbrushRate = if (isEraserOverride) 0.0 else brushAirbrushRate,
+            // 临时橡皮保持预设原生参数（overrides=0），不覆写形状且不泄漏主笔刷的涂抹/喷枪
+            isCustomized = if (isEraserOverride) false else strokeCustomized,
+            spacingCustomized = if (isEraserOverride) false else strokeCustomized,
         )
-        recorder.captureBrushFade(brushFade)
+        if (!isEraserOverride) {
+            recorder.captureBrushFade(brushFade)
+        }
         recorder.strokeStart(x, y, effPressure.toFloat())
     }
     val mode = if (isModeEraser) 1 else when (currentToolId) {
@@ -794,7 +800,7 @@ internal fun PaintViewModel.replaySymmetricBranches(
 
     // 录制器时间线录制 (与主笔画保持完全一致的图层/笔刷上下文)。
     // 与 recordMirroredBranchesOnly 共享同一份写入逻辑, 避免两处格式漂移。
-    recordMirroredBranchesToRecorder(activeBranches, activeCounts, totalActive, isEraser)
+    recordMirroredBranchesToRecorder(activeBranches, activeCounts, totalActive, isEraserOverride = hadOverride)
 
     val mode = if (isEraser || (isEraserMode && currentToolId == "brush")) 1 else when (currentToolId) {
         "brush" -> 0
@@ -885,48 +891,96 @@ private fun PaintViewModel.recordMirroredBranchesToRecorder(
     activeBranches: List<FloatArray>,
     activeCounts: IntArray,
     totalActive: Int,
-    isEraser: Boolean,
+    isEraserOverride: Boolean = false,
 ) {
-    if (!recorder.recording) return
+    if (!recorder.recording || totalActive <= 0) return
     val stride = PaintViewModel.STROKE_SAMPLE_STRIDE_WITH_TIME
-    val toolMode = if (isEraser || (isEraserMode && currentToolId == "brush")) 1 else when (currentToolId) {
+    val isModeEraser = isEraserOverride || (currentToolId == "eraser") || (isEraserMode && currentToolId == "brush")
+    val toolMode = if (isModeEraser) 1 else when (currentToolId) {
         "brush" -> 0
         "eraser" -> 1
         "smudge" -> 3
-        else -> -1
+        else -> 0
     }
+
+    val eraserState = if (isEraserOverride) toolBrushStates["eraser"] else null
+    val defaultEraserIdx = if (isEraserOverride) {
+        brushPresets.firstOrNull { it.name == "a)_Eraser_Circle" }?.index
+            ?: brushPresets.firstOrNull { it.name == "Eraser_circle" }?.index
+            ?: brushPresets.firstOrNull { it.group == "橡皮擦" }?.index
+            ?: -1
+    } else -1
+    val eraserPresetIdx = if (isEraserOverride) {
+        ToolPresetMemory.resolve(
+            eraserState?.presetId ?: "",
+            eraserState?.presetIndex ?: -1,
+            brushPresets,
+        )?.index ?: defaultEraserIdx
+    } else -1
+    val eraserPreset = if (isEraserOverride && eraserPresetIdx >= 0) brushPresets.firstOrNull { it.index == eraserPresetIdx } else null
+    val eraserId = eraserPreset?.id ?: ""
+    val eraserMem = if (isEraserOverride && eraserId.isNotBlank()) eraserState?.paramMemory?.get(eraserId) else null
+    val effEraserSize = if (isEraserOverride) (eraserMem?.getOrNull(0) ?: eraserId.takeIf { it.isNotBlank() }?.let { BrushStoreVm.readback(it)?.first?.size } ?: brushSize) else brushSize
+    val effEraserOpacity = if (isEraserOverride) (eraserMem?.getOrNull(1) ?: eraserId.takeIf { it.isNotBlank() }?.let { BrushStoreVm.readback(it)?.first?.opacity } ?: 1.0) else brushOpacity
+    val effEraserFlow = if (isEraserOverride) (eraserMem?.getOrNull(2) ?: eraserId.takeIf { it.isNotBlank() }?.let { BrushStoreVm.readback(it)?.first?.flow } ?: 1.0) else brushFlow
+
+    val mrPreset = if (isEraserOverride && eraserPresetIdx >= 0) eraserPresetIdx else brushPresetIndex
+    val mrSize = if (isEraserOverride) effEraserSize else brushSize
+    val mrOpacity = if (isEraserOverride) effEraserOpacity else brushOpacity
+    val mrFlow = if (isEraserOverride) effEraserFlow else brushFlow
+    val mrOp = if (isModeEraser) "erase" else brushCompositeOp
+    val mrColor = brushColor
+
+    val mrPid = brushPresets.firstOrNull { it.index == mrPreset }?.id
+    val mrCustomized = if (isEraserOverride) false else (mrPid?.let { BrushStoreVm.hasEffectivePreset(it) } == true)
+    val mrSoftness = if (isEraserOverride) KppHelper.SOFTNESS_NEUTRAL else brushSoftness
+    val mrSpacing = if (isEraserOverride) 0.1 else brushSpacing
+    val mrAngle = if (isEraserOverride) 0.0 else brushAngle
+    val mrScatter = if (isEraserOverride) 0.0 else brushScatter
+    val mrRotation = if (isEraserOverride) 0.0 else brushRotation
+    val mrRatio = if (isEraserOverride) 1.0 else brushRatio
+    val mrSharpness = if (isEraserOverride) 0.0 else brushSharpness
+    val mrSmudgeRate = if (isEraserOverride) 0.0 else brushSmudgeRate
+    val mrSmudgeLength = if (isEraserOverride) 0.0 else brushSmudgeLength
+    val mrAirbrush = if (isEraserOverride) false else brushAirbrush
+    val mrAirbrushRate = if (isEraserOverride) 0.0 else brushAirbrushRate
+
     for (b in 0 until totalActive) {
         val buf = activeBranches[b]
         val count = activeCounts[b]
+        if (count <= 0) continue
+        if (mrPreset >= 0 && recorder.markPresetSelected(mrPreset)) {
+            recordPresetSelectToRecorder(mrPreset)
+        }
         recorder.captureContext(
             toolMode = toolMode,
-            preset = brushPresetIndex,
-            size = brushSize,
-            opacity = brushOpacity,
-            flow = brushFlow,
-            compositeOp = if (isEraser || (isEraserMode && currentToolId == "brush")) "erase" else brushCompositeOp,
-            color = brushColor,
+            preset = mrPreset,
+            size = mrSize,
+            opacity = mrOpacity,
+            flow = mrFlow,
+            compositeOp = mrOp,
+            color = mrColor,
             layer = currentLayerIndex,
         )
-        val curPid = brushPresets.firstOrNull { it.index == brushPresetIndex }?.id
-        val curCustomized = curPid?.let { BrushStoreVm.hasEffectivePreset(it) } == true
         recorder.captureContextExt(
-            softness = brushSoftness,
-            spacing = brushSpacing,
-            angle = brushAngle,
-            scatter = brushScatter,
-            rotation = brushRotation,
-            ratio = brushRatio,
-            sharpness = brushSharpness,
-            smudgeRate = brushSmudgeRate,
-            smudgeLength = brushSmudgeLength,
+            softness = mrSoftness,
+            spacing = mrSpacing,
+            angle = mrAngle,
+            scatter = mrScatter,
+            rotation = mrRotation,
+            ratio = mrRatio,
+            sharpness = mrSharpness,
+            smudgeRate = mrSmudgeRate,
+            smudgeLength = mrSmudgeLength,
             secondaryColor = brushSecondaryColor,
-            airbrushEnabled = brushAirbrush,
-            airbrushRate = brushAirbrushRate,
-            isCustomized = curCustomized,
-            spacingCustomized = curCustomized,
+            airbrushEnabled = mrAirbrush,
+            airbrushRate = mrAirbrushRate,
+            isCustomized = mrCustomized,
+            spacingCustomized = mrCustomized,
         )
-        recorder.captureBrushFade(brushFade)
+        if (!isEraserOverride) {
+            recorder.captureBrushFade(brushFade)
+        }
         val effStartP = buf[2].coerceIn(0f, 1f)
         recorder.strokeStart(buf[0], buf[1], effStartP)
         for (i in 1 until count) {
@@ -950,7 +1004,7 @@ internal fun PaintViewModel.recordMirroredBranchesOnly(
     mirroredSamples: List<FloatArray>,
     mirroredSizes: IntArray,
     branchCount: Int = mirroredSamples.size,
-    isEraser: Boolean = false,
+    isEraserOverride: Boolean = (activeStrokeToolOverride == "eraser"),
 ) {
     if (!recorder.recording) return
     if (branchCount <= 0) return
@@ -970,7 +1024,7 @@ internal fun PaintViewModel.recordMirroredBranchesOnly(
         }
     }
     if (totalActive == 0) return
-    recordMirroredBranchesToRecorder(activeBranches, activeCounts, totalActive, isEraser)
+    recordMirroredBranchesToRecorder(activeBranches, activeCounts, totalActive, isEraserOverride)
 }
 
 /**
@@ -1118,8 +1172,8 @@ internal fun PaintViewModel.applyTool(toolId: String, force: Boolean = false) {
 
         val defaultBrushIdx = brushPresets.firstOrNull { it.name == "b)_Basic-5_Size_default" }?.index
             ?: brushPresets.firstOrNull { it.name == "b)_Basic-5_Size_Opacity" }?.index
-            ?: brushPresets.firstOrNull { it.group == "基础" && !it.name.startsWith("a)_Eraser", ignoreCase = true) && !it.name.contains("Eraser", ignoreCase = true) }?.index
-            ?: brushPresets.firstOrNull { it.group != "橡皮擦" && !it.name.startsWith("a)_Eraser", ignoreCase = true) && !it.name.contains("Eraser", ignoreCase = true) }?.index
+            ?: brushPresets.firstOrNull { it.group == "基础" && !BrushStoreVm.isEraserPreset(it) }?.index
+            ?: brushPresets.firstOrNull { it.group != "橡皮擦" && !BrushStoreVm.isEraserPreset(it) }?.index
             ?: brushPresets.firstOrNull()?.index
             ?: -1
 
@@ -1164,8 +1218,7 @@ internal fun PaintViewModel.applyTool(toolId: String, force: Boolean = false) {
         var resolved = ToolPresetMemory.resolve(state.presetId, state.presetIndex, brushPresets)
         if (isBrushTool && resolved != null) {
             // Self-healing: if brush tool mistakenly inherited an eraser preset, revert to default drawing brush
-            val isEraser = resolved.group == "橡皮擦" || resolved.name.startsWith("a)_Eraser") ||
-                resolved.name.equals("Eraser_circle", ignoreCase = true)
+            val isEraser = BrushStoreVm.isEraserPreset(resolved)
             if (isEraser) {
                 // 没有可用的默认画笔时保持原样（与旧行为一致），不要解析成 null 丢掉选择
                 brushPresets.firstOrNull { it.index == defaultBrushIdx }?.let { resolved = it }
@@ -1223,6 +1276,38 @@ internal fun PaintViewModel.gradientFill(
     reverse: Boolean = gradientReverse,
 ) {
     if (recorder.recording) {
+        val effToolMode = if (isEraserMode && currentToolId == "brush") 1 else when (currentToolId) {
+            "eraser" -> 1
+            "smudge" -> 3
+            else -> 0
+        }
+        val effCompOp = if (effToolMode == 1) "erase" else brushCompositeOp
+        recorder.captureContext(
+            toolMode = effToolMode,
+            preset = brushPresetIndex,
+            size = brushSize,
+            opacity = brushOpacity,
+            flow = brushFlow,
+            compositeOp = effCompOp,
+            color = brushColor,
+            layer = currentLayerIndex,
+        )
+        recorder.captureContextExt(
+            softness = brushSoftness,
+            spacing = brushSpacing,
+            angle = brushAngle,
+            scatter = brushScatter,
+            rotation = brushRotation,
+            ratio = brushRatio,
+            sharpness = brushSharpness,
+            smudgeRate = brushSmudgeRate,
+            smudgeLength = brushSmudgeLength,
+            secondaryColor = brushSecondaryColor,
+            airbrushEnabled = brushAirbrush,
+            airbrushRate = brushAirbrushRate,
+            isCustomized = false,
+            spacingCustomized = false,
+        )
         recorder.toolOp(T_GRADIENT_V2) {
             // 字段顺序须与回放分发/注释约定一致: 4×f32 坐标在前, type 在后
             it.f32(x1.toFloat())
@@ -1252,6 +1337,38 @@ internal fun PaintViewModel.gradientFillV3(
     stopColors: IntArray = intArrayOf(android.graphics.Color.BLACK, android.graphics.Color.WHITE),
 ) {
     if (recorder.recording) {
+        val effToolMode = if (isEraserMode && currentToolId == "brush") 1 else when (currentToolId) {
+            "eraser" -> 1
+            "smudge" -> 3
+            else -> 0
+        }
+        val effCompOp = if (effToolMode == 1) "erase" else brushCompositeOp
+        recorder.captureContext(
+            toolMode = effToolMode,
+            preset = brushPresetIndex,
+            size = brushSize,
+            opacity = brushOpacity,
+            flow = brushFlow,
+            compositeOp = effCompOp,
+            color = brushColor,
+            layer = currentLayerIndex,
+        )
+        recorder.captureContextExt(
+            softness = brushSoftness,
+            spacing = brushSpacing,
+            angle = brushAngle,
+            scatter = brushScatter,
+            rotation = brushRotation,
+            ratio = brushRatio,
+            sharpness = brushSharpness,
+            smudgeRate = brushSmudgeRate,
+            smudgeLength = brushSmudgeLength,
+            secondaryColor = brushSecondaryColor,
+            airbrushEnabled = brushAirbrush,
+            airbrushRate = brushAirbrushRate,
+            isCustomized = false,
+            spacingCustomized = false,
+        )
         recorder.toolOp(T_GRADIENT_V3) {
             it.f32(x1.toFloat())
             it.f32(y1.toFloat())
@@ -1415,6 +1532,18 @@ internal fun PaintViewModel.drawPolygon(
 ) {
     if (points.size < 2) return
     if (recorder.recording) {
+        val effToolMode = if (isEraserMode && currentToolId == "brush") 1 else 0
+        val effCompOp = if (effToolMode == 1) "erase" else brushCompositeOp
+        recorder.captureContext(
+            toolMode = effToolMode,
+            preset = brushPresetIndex,
+            size = brushSize,
+            opacity = brushOpacity,
+            flow = brushFlow,
+            compositeOp = effCompOp,
+            color = brushColor,
+            layer = currentLayerIndex,
+        )
         recorder.toolOp(T_POLYGON) {
             it.u8(if (closed) 1 else 0)
             it.u16(points.size)
@@ -1579,32 +1708,55 @@ internal fun PaintViewModel.applyTransform(
         return
     }
     val multi = layers.size > 1 || selectedLayerIndices.isNotEmpty()
+    val copyOnly = transformCopyOnly
     if (recorder.recording) {
         if (multi) recordLayerSet(recorder, T_TRANSFORM_LAYERS, layers)
-        recorder.toolOp(T_TRANSFORM) {
-            it.f64(xscale)
-            it.f64(yscale)
-            it.f64(xshear)
-            it.f64(yshear)
-            it.f64(rotationRad)
-            it.f64(xtranslate)
-            it.f64(ytranslate)
-            it.f64(originX)
-            it.f64(originY)
+        if (copyOnly) {
+            recorder.toolOp(com.reverie.paint.model.RecordingEvents.T_TRANSFORM_V2) {
+                it.f64(xscale)
+                it.f64(yscale)
+                it.f64(xshear)
+                it.f64(yshear)
+                it.f64(rotationRad)
+                it.f64(xtranslate)
+                it.f64(ytranslate)
+                it.f64(originX)
+                it.f64(originY)
+                it.u8(1)
+            }
+        } else {
+            recorder.toolOp(T_TRANSFORM) {
+                it.f64(xscale)
+                it.f64(yscale)
+                it.f64(xshear)
+                it.f64(yshear)
+                it.f64(rotationRad)
+                it.f64(xtranslate)
+                it.f64(ytranslate)
+                it.f64(originX)
+                it.f64(originY)
+            }
         }
     }
-    val copyOnly = transformCopyOnly
     val wasSelectionPending = isSelectionTransformPending
     val hadSelection = hasSelection
     val targetTool = com.reverie.paint.model.Tool.fromId(currentToolId)
     val isTargetSelectionTool = targetTool.group == com.reverie.paint.model.ToolGroup.SELECTION
     val shouldStashSelection = hadSelection && !isTargetSelectionTool
 
-    if (shouldStashSelection) {
+    if (wasSelectionPending) {
+        clearSelectionOverlayLocal()
+        if (recorder.recording) {
+            recorder.toolOp(com.reverie.paint.model.RecordingEvents.T_CLEAR_SELECTION)
+        }
+    } else if (shouldStashSelection) {
         transientTransformSelectionPending = true
         canUndoTransformSelection = true
         canRedoTransformSelection = false
         clearSelectionOverlayLocal()
+        if (recorder.recording) {
+            recorder.toolOp(com.reverie.paint.model.RecordingEvents.T_CLEAR_SELECTION)
+        }
     }
 
     // 引擎返回 false = 这次变换一个像素都没写出去 (选区里没有内容 / 落点全在画布外)。
@@ -1626,7 +1778,9 @@ internal fun PaintViewModel.applyTransform(
             showActionToast(R.string.toast_transform_copy_overlaps, R.drawable.ic_copy)
         }
         if (wasSelectionPending) {
-            clearSelection()
+            hasSelection = false
+            selectionOverlayBitmap = null
+            selectionOutlinePath = null
         } else if (shouldStashSelection) {
             clearSelectionOverlayLocal()
         } else {
@@ -1651,6 +1805,9 @@ internal fun PaintViewModel.applyTransform(
                 originY,
                 copyOnly,
             )
+        if (wasSelectionPending) {
+            ReverieCoreBridge.clearSelection()
+        }
         if (shouldStashSelection && !wasSelectionPending) {
             stashPostTransformAndClearSelectionCore()
         }
@@ -1693,11 +1850,19 @@ internal fun PaintViewModel.applyPerspectiveTransform(
     val isTargetSelectionTool = targetTool.group == com.reverie.paint.model.ToolGroup.SELECTION
     val shouldStashSelection = hadSelection && !isTargetSelectionTool
 
-    if (shouldStashSelection) {
+    if (wasSelectionPending) {
+        clearSelectionOverlayLocal()
+        if (recorder.recording) {
+            recorder.toolOp(com.reverie.paint.model.RecordingEvents.T_CLEAR_SELECTION)
+        }
+    } else if (shouldStashSelection) {
         transientTransformSelectionPending = true
         canUndoTransformSelection = true
         canRedoTransformSelection = false
         clearSelectionOverlayLocal()
+        if (recorder.recording) {
+            recorder.toolOp(com.reverie.paint.model.RecordingEvents.T_CLEAR_SELECTION)
+        }
     }
 
     runCore(render = true, after = {
@@ -1705,7 +1870,9 @@ internal fun PaintViewModel.applyPerspectiveTransform(
         transformPreviewBitmap = null
         isSelectionTransformPending = false
         if (wasSelectionPending) {
-            clearSelection()
+            hasSelection = false
+            selectionOverlayBitmap = null
+            selectionOutlinePath = null
         } else if (shouldStashSelection) {
             clearSelectionOverlayLocal()
         } else {
@@ -1729,6 +1896,9 @@ internal fun PaintViewModel.applyPerspectiveTransform(
             origW,
             origH,
         )
+        if (wasSelectionPending) {
+            ReverieCoreBridge.clearSelection()
+        }
         if (shouldStashSelection && !wasSelectionPending) {
             stashPostTransformAndClearSelectionCore()
         }
@@ -1772,11 +1942,19 @@ internal fun PaintViewModel.applyWarpMeshTransform(
     val isTargetSelectionTool = targetTool.group == com.reverie.paint.model.ToolGroup.SELECTION
     val shouldStashSelection = hadSelection && !isTargetSelectionTool
 
-    if (shouldStashSelection) {
+    if (wasSelectionPending) {
+        clearSelectionOverlayLocal()
+        if (recorder.recording) {
+            recorder.toolOp(com.reverie.paint.model.RecordingEvents.T_CLEAR_SELECTION)
+        }
+    } else if (shouldStashSelection) {
         transientTransformSelectionPending = true
         canUndoTransformSelection = true
         canRedoTransformSelection = false
         clearSelectionOverlayLocal()
+        if (recorder.recording) {
+            recorder.toolOp(com.reverie.paint.model.RecordingEvents.T_CLEAR_SELECTION)
+        }
     }
 
     runCore(render = true, after = {
@@ -1784,7 +1962,9 @@ internal fun PaintViewModel.applyWarpMeshTransform(
         transformPreviewBitmap = null
         isSelectionTransformPending = false
         if (wasSelectionPending) {
-            clearSelection()
+            hasSelection = false
+            selectionOverlayBitmap = null
+            selectionOutlinePath = null
         } else if (shouldStashSelection) {
             clearSelectionOverlayLocal()
         } else {
@@ -1805,6 +1985,9 @@ internal fun PaintViewModel.applyWarpMeshTransform(
             origW,
             origH,
         )
+        if (wasSelectionPending) {
+            ReverieCoreBridge.clearSelection()
+        }
         if (shouldStashSelection && !wasSelectionPending) {
             stashPostTransformAndClearSelectionCore()
         }
@@ -2474,8 +2657,16 @@ internal fun PaintViewModel.copyOrCutSelection(cut: Boolean, toNewLayer: Boolean
         }) {
             val newIdx = ReverieCoreBridge.copySelectionToNewLayer(cut)
             if (newIdx >= 0) {
-                if (!LanguageManager.isChinese()) {
-                    ReverieCoreBridge.setLayerName(newIdx, "Selection $newIdx")
+                val customName = if (!LanguageManager.isChinese()) "Selection $newIdx" else ""
+                if (customName.isNotEmpty()) {
+                    ReverieCoreBridge.setLayerName(newIdx, customName)
+                }
+                if (recorder.recording) {
+                    recorder.layerOp(
+                        com.reverie.paint.model.RecordingEvents.L_COPY_SELECTION,
+                        if (cut) 1 else 0,
+                        customName,
+                    )
                 }
                 success = true
                 ReverieCoreBridge.clearSelection()

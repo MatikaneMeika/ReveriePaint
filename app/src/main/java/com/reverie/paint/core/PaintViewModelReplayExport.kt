@@ -16,6 +16,7 @@ import com.reverie.paint.R
 import com.reverie.paint.model.RecordingEvents.FILTER
 import com.reverie.paint.model.RecordingEvents.FILTER_LUT
 import com.reverie.paint.model.RecordingEvents.LAYER_OP
+import com.reverie.paint.model.RecordingEvents.STROKE_CANCEL
 import com.reverie.paint.model.RecordingEvents.STROKE_END
 import com.reverie.paint.model.RecordingEvents.STROKE_MOVE
 import com.reverie.paint.model.RecordingEvents.TOOL_OP
@@ -418,8 +419,8 @@ internal fun PaintViewModel.exportReplay(
                 profiler.measureDispatch {
                     dispatchReplayLocked(s, type, r, render = false)
                 }
-                // 结构性事件强制下一帧全量渲染，避免局部脏区遗漏全局图层/滤镜变化
-                if (type == LAYER_OP || type == TOOL_OP || type == FILTER || type == FILTER_LUT) {
+                // 结构性事件或笔画取消强制下一帧全量渲染，避免局部脏区遗漏全局图层/滤镜/回滚变化
+                if (type == LAYER_OP || type == TOOL_OP || type == FILTER || type == FILTER_LUT || type == STROKE_CANCEL) {
                     forceFullNext = true
                 }
                 if (s.currentMs < startMs) {
@@ -438,9 +439,10 @@ internal fun PaintViewModel.exportReplay(
                 }
             }
 
-            // 闭合末尾笔画并写入最终成图帧及定格帧 (定格帧隐藏笔刷光标以展示干净成图)
+            // 闭合末尾笔画并写入最终成图帧及定格帧 (定格帧隐藏笔刷光标并强制全量渲染以展示无残影成图)
             s.cursorActive = false
             ReverieCoreBridge.touchStrokeEnd()
+            forceFullNext = true
             val remainingHoldFrames = totalOutputFrames - emittedFrames
             if (remainingHoldFrames > 0) {
                 emittedFrames = totalOutputFrames

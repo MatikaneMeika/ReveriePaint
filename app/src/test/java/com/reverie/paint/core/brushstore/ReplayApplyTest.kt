@@ -15,7 +15,7 @@ class ReplayApplyTest {
 
     private val engine = object : BrushApply.EngineFacade {
         override fun loadBrushPreset(index: Int) = true
-        override fun setPresetIsEraser(isEraser: Boolean) {}
+        override fun setPresetIsEraser(isEraser: Boolean) { calls += "eraser:$isEraser" }
         override fun setBrushCompositeOp(op: String) { calls += "op:$op" }
         override fun setBrushColor(color: String) { calls += "color:$color" }
         override fun setBrushSecondaryColor(color: String) { calls += "color2:$color" }
@@ -52,7 +52,9 @@ class ReplayApplyTest {
         preset, overrides, 0.1, 0.2, 3.0, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, "#abc", true, 0.3,
     )
 
-    private val tail = listOf("smudgeRate:0.8", "smudgeLen:0.9", "color2:#abc", "airbrush:true:0.3")
+    private val shapeCalls = listOf("softness:0.1", "spacing:0.2", "angle:3.0", "scatter:0.4", "rotation:0.5", "ratio:0.6", "sharpness:0.7", "smudgeRate:0.8", "smudgeLen:0.9", "airbrush:true:0.3")
+    private val shapeCallsNoSpacing = listOf("softness:0.1", "angle:3.0", "scatter:0.4", "rotation:0.5", "ratio:0.6", "sharpness:0.7", "smudgeRate:0.8", "smudgeLen:0.9", "airbrush:true:0.3")
+    private val secondaryColorCall = listOf("color2:#abc")
 
     @Test
     fun `CONTEXT 按录制顺序施加工具模式 尺寸 不透明度 流量 混合 颜色`() {
@@ -61,27 +63,33 @@ class ReplayApplyTest {
     }
 
     @Test
-    fun `预设被定制过时施加形状 含间距`() {
+    fun `CONTEXT 携带 isEraser 时在 setToolMode 之后重申橡皮标志`() {
+        BrushApply.applyReplayContext(0, 12.0, 0.5, 0.25, "erase", "#112233", isEraser = true)
+        assertEquals(listOf("tool:0", "eraser:true", "size:12.0", "opacity:0.5", "flow:0.25", "op:erase", "color:#112233"), calls)
+    }
+
+    @Test
+    fun `预设被定制过时施加形状 含间距与涂抹喷枪`() {
         ext(preset = 5, overrides = 1)
-        assertEquals(listOf("softness:0.1", "spacing:0.2", "angle:3.0", "scatter:0.4", "rotation:0.5", "ratio:0.6", "sharpness:0.7") + tail, calls)
+        assertEquals(shapeCalls + secondaryColorCall, calls)
     }
 
     @Test
     fun `定制过但没动间距的预设保留原生间距`() {
         ext(preset = 5, overrides = 3)
-        assertEquals(listOf("softness:0.1", "angle:3.0", "scatter:0.4", "rotation:0.5", "ratio:0.6", "sharpness:0.7") + tail, calls)
+        assertEquals(shapeCallsNoSpacing + secondaryColorCall, calls)
     }
 
     @Test
-    fun `没被定制的预设只施加涂抹 副色 喷枪`() {
+    fun `没被定制的预设保留原生形状与涂抹喷枪副色不覆写`() {
         ext(preset = 5, overrides = 0)
-        assertEquals(tail, calls)
+        assertEquals(emptyList<String>(), calls)
     }
 
     @Test
-    fun `无预设会话总是施加形状`() {
+    fun `无预设会话总是施加形状与涂抹喷枪`() {
         ext(preset = -1, overrides = 0)
-        assertEquals(listOf("softness:0.1", "spacing:0.2", "angle:3.0", "scatter:0.4", "rotation:0.5", "ratio:0.6", "sharpness:0.7") + tail, calls)
+        assertEquals(shapeCalls + secondaryColorCall, calls)
     }
 
     @Test

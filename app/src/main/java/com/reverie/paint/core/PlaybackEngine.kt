@@ -54,6 +54,7 @@ import com.reverie.paint.model.RecordingEvents.L_REMOVE
 import com.reverie.paint.model.RecordingEvents.L_REMOVE_MASK
 import com.reverie.paint.model.RecordingEvents.L_INVERT_MASK
 import com.reverie.paint.model.RecordingEvents.L_APPLY_MASK
+import com.reverie.paint.model.RecordingEvents.L_COPY_SELECTION
 import com.reverie.paint.model.RecordingEvents.L_RENAME
 import com.reverie.paint.model.RecordingEvents.L_SET_BG
 import com.reverie.paint.model.RecordingEvents.L_SET_CURRENT
@@ -111,6 +112,7 @@ import com.reverie.paint.model.RecordingEvents.T_SIMILAR_V2
 import com.reverie.paint.model.RecordingEvents.T_SMOOTH
 import com.reverie.paint.model.RecordingEvents.T_TEXT
 import com.reverie.paint.model.RecordingEvents.T_TRANSFORM
+import com.reverie.paint.model.RecordingEvents.T_TRANSFORM_V2
 import com.reverie.paint.model.RecordingEvents.T_TRANSFORM_LAYERS
 import com.reverie.paint.model.RecordingEvents.T_WARP
 import com.reverie.paint.model.RecordingReader
@@ -465,6 +467,7 @@ internal fun PaintViewModel.resetReplayDocLocked(
 ) {
     currentReplayPreset = -1
     replayPresetIndexMapping.clear()
+    pendingReplayLayers = null
     s.lastPatternPng = null
     s.cursorActive = false
     s.cursorBrushSize = 18f
@@ -712,6 +715,7 @@ internal fun skipReplayEventPayload(
                 T_LIQUIFY -> r.skip(21) // fx/fy/tx/ty 4*f32, mode u8, strength f32
                 T_MOVE_CONTENT -> r.skip(8) // dx/dy 2*f32
                 T_TRANSFORM -> r.skip(72) // 9 * f64
+                T_TRANSFORM_V2 -> r.skip(73) // 9 * f64 + copyOnly u8
                 T_PERSPECTIVE -> r.skip(96) // 12 * f64
                 T_WARP -> {
                     val n = r.u16()
@@ -927,24 +931,14 @@ private fun PaintViewModel.applyReplayContextLocked(c: com.reverie.paint.model.R
             presetId = pId,
             md5 = "",
         )
-        val isEraser = p != null && (
-            p.group == "橡皮擦" ||
-                p.name.startsWith("a)_Eraser", ignoreCase = true) ||
-                p.name.contains("Eraser", ignoreCase = true)
-        )
+        val isEraser: Boolean? = p?.let { BrushStoreVm.isEraserPreset(it) }
         com.reverie.paint.core.brushstore.BrushApply.applyReplay(sel, isEraser)
     }
     val presetInfo = if (targetPreset >= 0) brushPresets.firstOrNull { it.index == targetPreset } else null
-    val isPresetEraser =
-        presetInfo != null &&
-            (
-                presetInfo.group == "橡皮擦" ||
-                    presetInfo.name.startsWith("a)_Eraser", ignoreCase = true) ||
-                    presetInfo.name.contains("Eraser", ignoreCase = true)
-            )
+    val isPresetEraser: Boolean? = presetInfo?.let { BrushStoreVm.isEraserPreset(it) }
     replaySession?.let { s ->
         s.cursorToolMode = c.toolMode
-        s.cursorIsEraser = c.toolMode == 1 || c.compositeOp.equals("erase", ignoreCase = true) || isPresetEraser
+        s.cursorIsEraser = c.toolMode == 1 || c.compositeOp.equals("erase", ignoreCase = true) || isPresetEraser == true
         s.cursorBrushSize = c.size.coerceAtLeast(2f)
         s.cursorColorArgb =
             runCatching {
@@ -953,9 +947,15 @@ private fun PaintViewModel.applyReplayContextLocked(c: com.reverie.paint.model.R
     }
     // size/opacity/flow 由 CONTEXT 事件无条件携带 (录制时的实时值), 必须在
     // loadBrushPreset 之后应用——预设加载会重置它们; preset=-1 (无预设会话)
-    // 时旧版直接跳过导致回放丢失这三个参数
+    // 时旧版直接跳过导致回放丢失这三个参数; 同时在 setToolMode 之后重申预设橡皮标志
     com.reverie.paint.core.brushstore.BrushApply.applyReplayContext(
-        c.toolMode, c.size.toDouble(), c.opacity.toDouble(), c.flow.toDouble(), c.compositeOp, c.color,
+        c.toolMode,
+        c.size.toDouble(),
+        c.opacity.toDouble(),
+        c.flow.toDouble(),
+        c.compositeOp,
+        c.color,
+        isEraser = isPresetEraser,
     )
     ReverieCoreBridge.setCurrentLayer(c.layer)
 }
@@ -1154,6 +1154,16 @@ private fun PaintViewModel.dispatchLayerOpLocked(
         L_APPLY_FILTER -> {
             ReverieCoreBridge.applyFilter(i, arg.toIntOrNull() ?: 0)
         }
+
+        L_COPY_SELECTION -> {
+            val newIdx = ReverieCoreBridge.copySelectionToNewLayer(i != 0)
+            if (newIdx >= 0) {
+                if (arg.isNotEmpty()) {
+                    ReverieCoreBridge.setLayerName(newIdx, arg)
+                }
+                ReverieCoreBridge.clearSelection()
+            }
+        }
     }
 }
 
@@ -1334,11 +1344,16 @@ private fun PaintViewModel.dispatchToolOpLocked(
             }
         }
 
-        T_TRANSFORM -> {
+        T_TRANSFORM, T_TRANSFORM_V2 -> {
             val a = DoubleArray(9) { r.f64() }
+            val copyOnly = if (op == T_TRANSFORM_V2) r.u8() != 0 else false
             val layers = pendingReplayLayers
             pendingReplayLayers = null
-            if (layers != null) {
+            if (copyOnly) {
+                ReverieCoreBridge.applyTransformLayersEx(
+                    layers, a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8], true,
+                )
+            } else if (layers != null) {
                 ReverieCoreBridge.applyTransformLayers(
                     layers, a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8],
                 )

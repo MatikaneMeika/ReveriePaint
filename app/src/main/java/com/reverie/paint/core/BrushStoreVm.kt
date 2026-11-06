@@ -103,6 +103,9 @@ internal object BrushStoreVm {
         override fun reload(id: String) {
             val p = vm.brushPresets.firstOrNull { it.index == vm.brushPresetIndex }
             if (p != null && p.id == id) {
+                if (vm.recorder.recording) {
+                    vm.recorder.resetContextDiff()
+                }
                 vm.runCore(render = false) {
                     // 轻量 reload：不回读灌 UI（readback / brushParams 整替 / sensor XML 灌入），
                     // 编辑会话中途重载不打断手势，UI 状态保持用户现值
@@ -254,6 +257,10 @@ internal object BrushStoreVm {
                 host.notifyBrushModified()
             }
             return res
+        } catch (t: Throwable) {
+            if (t is kotlinx.coroutines.CancellationException) throw t
+            BrushDiagnostics.log("flush_failed", "id" to id, "err" to t.javaClass.simpleName, "msg" to (t.message ?: ""))
+            return null
         } finally {
             synchronized(lock) { inflightFlush -= id }
         }
