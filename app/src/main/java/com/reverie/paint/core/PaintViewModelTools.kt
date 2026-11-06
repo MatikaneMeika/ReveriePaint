@@ -1004,7 +1004,7 @@ internal fun PaintViewModel.recordMirroredBranchesOnly(
     mirroredSamples: List<FloatArray>,
     mirroredSizes: IntArray,
     branchCount: Int = mirroredSamples.size,
-    isEraserOverride: Boolean = (activeStrokeToolOverride == "eraser"),
+    isEraser: Boolean = (activeStrokeToolOverride == "eraser"),
 ) {
     if (!recorder.recording) return
     if (branchCount <= 0) return
@@ -1024,7 +1024,7 @@ internal fun PaintViewModel.recordMirroredBranchesOnly(
         }
     }
     if (totalActive == 0) return
-    recordMirroredBranchesToRecorder(activeBranches, activeCounts, totalActive, isEraserOverride)
+    recordMirroredBranchesToRecorder(activeBranches, activeCounts, totalActive, isEraser)
 }
 
 /**
